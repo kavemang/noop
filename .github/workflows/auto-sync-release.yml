@@ -1,0 +1,111 @@
+name: Auto sync + release from ryanbr
+
+on:
+  schedule:
+    # Poll for upstream releases every 6 hours.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-sync-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync from ryanbr/noop
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/ryanbr/noop.git
+          git fetch upstream main --tags
+
+          upstream_sha=$(git rev-parse upstream/main)
+          upstream_version=$(git show upstream/main:android/app/build.gradle.kts \
+            | sed -nE 's/.*versionName = "([^"]+)".*/\1/p' \
+            | head -1)
+          if [ -z "$upstream_version" ]; then
+            echo "::error::Could not read upstream Android versionName."
+            exit 1
+          fi
+
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "upstream_version=$upstream_version" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo "Fork already contains upstream/main at $upstream_sha."
+          else
+            echo "Merging ryanbr/noop main at $upstream_sha."
+            git merge --no-edit upstream/main
+            git push origin HEAD:main
+          fi
+
+      - name: Check fork release assets
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.sync.outputs.upstream_version }}
+        run: |
+          set -euo pipefail
+
+          tag="v${VER}"
+          required_assets=(
+            "NOOP-android-v${VER}.apk"
+            "NOOP-ios-unsigned-v${VER}.ipa"
+            "NOOP-macos-v${VER}.zip"
+          )
+
+          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          missing=0
+          for asset in "${required_assets[@]}"; do
+            if ! grep -Fxq "$asset" <<< "$assets"; then
+              echo "Missing release asset: $asset"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -eq 0 ]; then
+            echo "Release $tag already has all expected assets."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $tag needs to be built or refreshed."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch release build
+        if: steps.release.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run fork-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f bump=none \
+            -f version=
+
+      - name: Summary
+        run: |
+          {
+            echo "### Auto sync + release"
+            echo
+            echo "- Upstream commit: \`${{ steps.sync.outputs.upstream_sha }}\`"
+            echo "- Upstream version: \`${{ steps.sync.outputs.upstream_version }}\`"
+            echo "- Release build dispatched: \`${{ steps.release.outputs.needed }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
