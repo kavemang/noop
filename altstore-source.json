@@ -22,8 +22,8 @@
           "buildVersion": "177",
           "date": "2026-07-07",
           "localizedDescription": "NOOP 8.3.4. See the release notes for what changed.",
-          "downloadURL": "https://github.com/ryanbr/noop/releases/download/v8.3.4/NOOP-ios-unsigned-v8.3.4.ipa",
-          "size": 22665363,
+          "downloadURL": "https://github.com/kavemang/noop/releases/download/v8.3.4/NOOP-ios-unsigned-v8.3.4.ipa",
+          "size": 22665367,
           "minOSVersion": "17.0"
         },
         {
@@ -1211,8 +1211,8 @@
       "buildVersion": "177",
       "versionDate": "2026-07-07",
       "versionDescription": "NOOP 8.3.4. See the release notes for what changed.",
-      "downloadURL": "https://github.com/ryanbr/noop/releases/download/v8.3.4/NOOP-ios-unsigned-v8.3.4.ipa",
-      "size": 22665363,
+      "downloadURL": "https://github.com/kavemang/noop/releases/download/v8.3.4/NOOP-ios-unsigned-v8.3.4.ipa",
+      "size": 22665367,
       "minOSVersion": "17.0"
     }
   ],
