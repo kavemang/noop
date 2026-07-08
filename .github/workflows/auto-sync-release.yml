@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -63,7 +63,8 @@ jobs:
             git push origin HEAD:main
           fi
 
-          if ! git diff --quiet HEAD upstream/main -- .github/workflows; then
+          if ! git diff --quiet HEAD upstream/main -- .github/workflows \
+            ":(exclude).github/workflows/auto-sync-release.yml"; then
             echo "::warning::ryanbr/noop has workflow changes. GitHub's default GITHUB_TOKEN cannot push workflow-file updates, so this workflow leaves .github/workflows unchanged for manual review."
           fi
 
