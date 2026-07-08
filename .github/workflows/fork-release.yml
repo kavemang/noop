@@ -101,6 +101,7 @@ jobs:
           # Create only if missing (a re-run refreshes assets rather than clobbering the release/notes).
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists — re-run: platform jobs will refresh its assets."
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --target "$(git rev-parse HEAD)"
           else
             # Release body = the maintained per-version changelog docs/releases/<TAG>.md, plus a
             # downloads footer. Warn (don't fail) if that file is missing so you notice a forgotten

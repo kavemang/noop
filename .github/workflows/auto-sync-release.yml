@@ -83,7 +83,10 @@ jobs:
             "NOOP-macos-v${VER}.zip"
           )
 
-          assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          release_json=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,targetCommitish 2>/dev/null || true)
+          [ -n "$release_json" ] || release_json='{"assets":[],"targetCommitish":""}'
+          assets=$(jq -r '.assets[]?.name // empty' <<< "$release_json")
+          target=$(jq -r '.targetCommitish // empty' <<< "$release_json")
           missing=0
           for asset in "${required_assets[@]}"; do
             if ! grep -Fxq "$asset" <<< "$assets"; then
@@ -91,6 +94,10 @@ jobs:
               missing=1
             fi
           done
+          if [ "$target" != "$(git rev-parse HEAD)" ]; then
+            echo "Release $tag targets ${target:-nothing}, not current main $(git rev-parse HEAD)."
+            missing=1
+          fi
 
           if [ "$missing" -eq 0 ]; then
             echo "Release $tag already has all expected assets."
