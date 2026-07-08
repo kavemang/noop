@@ -21,8 +21,22 @@ public final class FrameRouter {
     }
 
     /// Handle one complete frame (bytes including 0xAA SOF and the crc32 trailer).
+    /// Parse-then-forward shim (#47). Kept so existing callers/tests that pass raw bytes are unchanged;
+    /// the live BLE seam now parses ONCE and calls `handle(parsed:frame:)` directly.
     public func handle(frame: [UInt8]) {
-        let parsed = parseFrame(frame, family: family)
+        handle(parsed: parseFrame(frame, family: family), frame: frame)
+    }
+
+    /// #47: the caller parses the frame ONCE at the BLE seam and threads the result here, so a live
+    /// WHOOP4 frame is decoded once instead of 2–3× (router + clock-correlation + collector). `frame` is
+    /// still passed for the byte-level sub-decoders below.
+    public func handle(parsed: ParsedFrame, frame: [UInt8]) {
+        #if DEBUG
+        // Guard the "parse once == parse per consumer" invariant in dev/test builds only (assert is stripped
+        // from Release): a threading bug (wrong family / stale frame) trips here, never on a user's wrist.
+        assert(parsed == parseFrame(frame, family: family),
+               "FrameRouter.handle: threaded ParsedFrame != fresh parse (#47 parse-once invariant)")
+        #endif
         guard parsed.ok else { return }
         // Reject frames that failed their checksum — never let bad bytes drive state.
         if parsed.crcOK == false { return }
@@ -109,8 +123,18 @@ public final class FrameRouter {
                     if let epoch = Self.armedAlarmEpoch(in: frame) {
                         state.append(log: "Alarm: strap reports armed for \(Self.alarmLocalTime(epoch: epoch)) (epoch \(epoch))")
                         // #34: persist what the strap reports so the debug export can show sent-vs-reported.
-                        UserDefaults.standard.set(Int(epoch), forKey: "alarm.lastReportedEpoch")
-                        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "alarm.lastReportedAt")
+                        let d = UserDefaults.standard
+                        d.set(Int(epoch), forKey: "alarm.lastReportedEpoch")
+                        d.set(Date().timeIntervalSince1970, forKey: "alarm.lastReportedAt")
+                        // #34: count CONSECUTIVE rejections (reported ≠ what we last sent) — the signature of
+                        // a corrupted strap alarm register. A matching readback resets it, so a transient
+                        // (first read stale, then correct) never trips the warning; only a persistent refusal
+                        // climbs. SmartAlarmView surfaces the warning at ≥2; the debug export shows the count.
+                        // Observability only — never gates the BLE arm.
+                        if let sent = d.object(forKey: "alarm.lastArmSentEpoch") as? Int {
+                            d.set(abs(Int(epoch) - sent) > 120 ? d.integer(forKey: "alarm.rejectStreak") + 1 : 0,
+                                  forKey: "alarm.rejectStreak")
+                        }
                     } else {
                         state.append(log: "Alarm: strap answered the alarm readback with an unrecognised payload (raw \(Self.commandResponsePayloadHex(in: frame) ?? "empty")) - layout undocumented, log-only")
                     }
@@ -276,6 +300,12 @@ public final class FrameRouter {
     /// Deliberately does NOT touch lastEvent / sync trigger / bonded / battery — those stay on the normal
     /// handle(frame:) path, so backfill UI behaviour is otherwise unchanged.
     func dispatchLiveGestureIfFresh(frame: [UInt8], now: Int = Int(Date().timeIntervalSince1970)) {
+        // #47: this fires for EVERY frame on the OFFLOAD path (thousands of type-47 records over a
+        // multi-minute sync) purely to catch a rare EVENT gesture. Cheap type-only pre-check skips the full
+        // CRC + FieldBuilder decode for non-EVENT frames — byte-identical: an EVENT frame still gets the
+        // full parse + CRC guard below; a non-EVENT frame was discarded at the `typeName == "EVENT"` guard
+        // anyway. Family-aware (WHOOP4 type @[4], 5/MG @[8]).
+        guard frameTypeName(frame, family: family) == "EVENT" else { return }
         let parsed = parseFrame(frame, family: family)
         guard parsed.ok, parsed.crcOK != false else { return }
         guard parsed.typeName == "EVENT", let ev = parsed.parsed["event"]?.stringValue else { return }

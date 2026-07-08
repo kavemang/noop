@@ -45,6 +45,21 @@ enum DebugDataDiagnostics {
                 + "(if you restored a backup, fully restart the app — #57)")
         }
         if restoreAt > 0 { lines.append("Last restore: \(relTime(now - restoreAt))") }
+        #if os(iOS)
+        // #52: iOS Backup & Sync folder-picker health. When users report "won't let me pick a folder",
+        // this pins the failure stage: "cancelled"/"never used" ⇒ the picker's Open button never fired
+        // (an iOS-side picker issue — the in-app "Use NOOP's own folder" fallback sidesteps it);
+        // "picked" + a FAILED flag ⇒ a returned folder failed to bookmark HERE (our bug).
+        let pickEvent = d.string(forKey: "backupPicker.lastEvent") ?? "never used"
+        let pickAt = d.double(forKey: "backupPicker.lastEventAt")
+        lines.append("Folder picker: \(pickEvent)\(pickAt > 0 ? " (\(relTime(now - pickAt)))" : "")")
+        if pickEvent == "picked" {
+            let scoped = d.bool(forKey: "backupPicker.lastScopedOpen")
+            let bmOk = d.bool(forKey: "backupPicker.lastBookmarkOk")
+            lines.append("             scoped-access \(scoped ? "ok" : "FAILED"), bookmark \(bmOk ? "ok" : "FAILED")")
+        }
+        lines.append("Backup mode:  \(FolderBackup.useInternalFolder ? "NOOP's own folder (#52 fallback)" : (FolderBackup.hasFolder ? "external folder" : "none chosen"))")
+        #endif
         lines.append("Timezone:    \(tzLine())")
         return lines
     }
@@ -197,14 +212,15 @@ enum DebugDataDiagnostics {
         } else {
             lines.append("Model: \(model)")
         }
-        // #4: strap clock health — a reset/stale OR future-dated clock (the #34 / #928 causes) breaks the
-        // alarm even when armed.
+        // #4 / #67: strap clock health — a reset/stale OR future-dated clock (the #34 / #928 causes) breaks
+        // the alarm even when armed, AND misdates offloaded sleep: the strap banks last night with its wrong
+        // RTC, so the night lands on the stale date and reads as "missed sleep" on the recent timeline (#67).
         if let newest = d.object(forKey: "strap.newestRecordTs") as? Int, newest > 0 {
             let behind = Int(Date().timeIntervalSince1970) - newest
             if behind > 3 * 86400 {
-                lines.append("Strap clock: \(behind / 86400)d behind wall (reset/stale — alarm unreliable)")
+                lines.append("Strap clock: \(behind / 86400)d behind wall (reset/stale — alarm unreliable; recent sleep may be filed ~\(behind / 86400)d in the past, #67)")
             } else if behind < -3 * 86400 {
-                lines.append("Strap clock: \(-behind / 86400)d AHEAD of wall (future-dated — alarm unreliable)")
+                lines.append("Strap clock: \(-behind / 86400)d AHEAD of wall (future-dated — alarm unreliable; recent sleep may be misdated, #67)")
             } else {
                 lines.append("Strap clock: OK")
             }
@@ -215,11 +231,22 @@ enum DebugDataDiagnostics {
                 line += " · \(relTime(Date().timeIntervalSince1970 - at))"
             }
             if !d.bool(forKey: "alarm.lastArmConnected") { line += " · strap NOT connected (queued)" }
+            // #34: the strap-clock skew AT ARM. Skew ~0 but the strap still rejects ⇒ a corrupted alarm
+            // register, not a clock problem (which pins whether a re-clock could ever help).
+            if let skew = d.object(forKey: "alarm.lastArmClockSkew") as? Int, abs(skew) > 3600 {
+                let mag = abs(skew) >= 86400 ? "\(skew / 86400)d" : "\(skew / 3600)h"
+                line += " · strap clock at arm \(skew > 0 ? "+" : "")\(mag)"
+            }
             lines.append(line)
             if let reported = d.object(forKey: "alarm.lastReportedEpoch") as? Int {
                 let mismatch = abs(reported - sent) > 120
-                lines.append("Strap reports: \(alarmStamp(reported))"
-                    + (mismatch ? "  ⚠️ MISMATCH — strap didn't accept the time" : "  ✓ matches"))
+                var rline = "Strap reports: \(alarmStamp(reported))"
+                    + (mismatch ? "  ⚠️ MISMATCH — strap didn't accept the time" : "  ✓ matches")
+                // #34: consecutive rejections — a persistent refusal (vs a one-off) points at a strap whose
+                // alarm register needs a reset, and is what SmartAlarmView warns the user about at ≥2.
+                let streak = d.integer(forKey: "alarm.rejectStreak")
+                if streak >= 2 { rline += " · \(streak) in a row (register likely needs a reset, #34)" }
+                lines.append(rline)
             } else {
                 lines.append("Strap reports: (no readback)")
             }

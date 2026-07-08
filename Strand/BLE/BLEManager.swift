@@ -1625,6 +1625,15 @@ public final class BLEManager: NSObject, ObservableObject {
         if let bf = backfiller,
            let summary = Backfiller.sessionSummaryLine(rows: bf.sessionRowsPersisted, motion: bf.sessionMotionRows, skinTemp: bf.sessionSkinTempRows, nights: bf.sessionNights) {
             log(summary)
+            // #67: WHERE the rows landed + WHY (the clock ref that decoded them). A reset-RTC strap banks
+            // last night into the past; this line makes the misdating self-evident in the strap log instead
+            // of leaving "persisted N rows across 1 night(s)" looking like a clean sync.
+            if let diag = Backfiller.sessionClockDiagLine(nightKeys: bf.sessionNightKeys,
+                                                          device: bf.sessionClockDevice,
+                                                          wall: bf.sessionClockWall,
+                                                          usedIdentityRef: bf.sessionUsedIdentityRef) {
+                log(diag)
+            }
         }
         // Connection test mode: the offload OUTCOME the readout's lastOffloadResult id binds. Gated
         // zero-cost (the .connection bool is read before any string is built). Diagnostic only - it reads
@@ -2452,10 +2461,18 @@ public final class BLEManager: NSObject, ObservableObject {
         d.set(sentEpoch, forKey: "alarm.lastArmSentEpoch")
         d.set(Date().timeIntervalSince1970, forKey: "alarm.lastArmAt")
         d.set(connectedPeripheralUUID != nil, forKey: "alarm.lastArmConnected")
+        // #34: the strap-clock skew (its own RTC minus wall, seconds) AT THE MOMENT we armed. A wrong RTC
+        // is a top cause of the firmware alarm never firing, and knowing the clock state at arm — not just
+        // now — tells whether the arm even had a chance (skew ~0 but the strap still rejects ⇒ a corrupted
+        // alarm register, not a clock problem).
+        d.set(strapClockNow - Int(Date().timeIntervalSince1970), forKey: "alarm.lastArmClockSkew")
     }
 
     /// Disarm the currently-armed firmware alarm.
     func disableStrapAlarm() {
+        // #34: clear the "strap keeps rejecting the alarm" streak/warning — it's about an ACTIVE arm being
+        // refused, and there's nothing armed to refuse once disarmed.
+        UserDefaults.standard.set(0, forKey: "alarm.rejectStreak")
         if selectedModel.deviceFamily == .whoop5 {
             // 5/MG DISABLE_ALARM is REVISION_2 [0x02, 0xFF]; the rev-1 [0x01] form below is WHOOP4.
             send(.disableAlarm, payload: AlarmPayload.disableRev2())
@@ -3407,7 +3424,15 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     router.dispatchLiveGestureIfFresh(frame: frame, now: strapClockNow)
                     continue
                 }
-                router.handle(frame: frame)                       // live/UI path
+                // #47: decode this live WHOOP4 frame ONCE here and thread the result to every consumer
+                // (router / clock-correlation / collector) instead of each re-parsing it — steady-state
+                // drops 2→1 parse per frame, pre-clock 3→1. This is the WHOOP4 custom-notify case (5/MG has
+                // its own case), so parse with `.whoop4` explicitly — the same family this loop already uses
+                // for isOffloadFrame, and byte-identical to all three original parses (router.family /
+                // collector.family / the no-family clock parse all resolve to .whoop4 here; a DEBUG assert in
+                // the router + collector re-checks the invariant).
+                let parsed = parseFrame(frame, family: .whoop4)
+                router.handle(parsed: parsed, frame: frame)       // live/UI path
                 if frame.count > 6, frame[6] == WhoopCommand.getDataRange.rawValue {
                     // #451: the decoded "newest" can latch a stale/wrong-epoch field (claypilat saw 2024 when
                     // the real newest was 2026). To tell a genuinely-stale strap apart from a frame-alignment
@@ -3467,7 +3492,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 // Clock correlation runs in both live and backfill modes. Once established it
                 // unblocks both the Collector (live path) and the Backfiller (chunk decoding).
                 if clockRef == nil {
-                    let parsed = parseFrame(frame)
+                    // #47: reuse the single decode above (byte-identical for WHOOP4) instead of re-parsing.
                     if let ref = ClockCorrelation.clockRef(from: parsed, wall: Int(Date().timeIntervalSince1970)) {
                         clockRef = ref
                         collector?.clockRef = ref                  // unblocks buffered persistence
@@ -3483,8 +3508,9 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     }
                 }
                 if !backfilling {
-                    // Live path (unchanged): synchronous ingest preserves delegate arrival order.
-                    collector?.ingest(frame)
+                    // Live path: synchronous ingest preserves delegate arrival order. #47: thread the
+                    // single parse so the collector's flush doesn't re-decode the batch.
+                    collector?.ingest(frame: frame, parsed: parsed)
                 }
             }
         default:
