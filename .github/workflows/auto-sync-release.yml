@@ -94,9 +94,19 @@ jobs:
               missing=1
             fi
           done
-          if [ "$target" != "$(git rev-parse HEAD)" ]; then
-            echo "Release $tag targets ${target:-nothing}, not current main $(git rev-parse HEAD)."
+          if [ -z "$target" ]; then
+            echo "Release $tag has no target commit."
             missing=1
+          elif ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
+            echo "Release $tag target $target is not present in the checkout."
+            missing=1
+          elif ! git diff --quiet "$target" HEAD -- . \
+            ":(exclude).github/workflows/**" \
+            ":(exclude)altstore-source.json"; then
+            echo "Release $tag is behind current main for app/source files."
+            missing=1
+          else
+            echo "Release $tag target differs only by ignored workflow or AltStore metadata changes."
           fi
 
           if [ "$missing" -eq 0 ]; then
