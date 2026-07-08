@@ -48,12 +48,23 @@ jobs:
           echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
           echo "upstream_version=$upstream_version" >> "$GITHUB_OUTPUT"
 
-          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
-            echo "Fork already contains upstream/main at $upstream_sha."
+          if git diff --quiet HEAD upstream/main -- . \
+            ":(exclude).github/workflows/**" \
+            ":(exclude)altstore-source.json"; then
+            echo "Fork already matches upstream/main for auto-syncable files."
           else
-            echo "Merging ryanbr/noop main at $upstream_sha."
-            git merge --no-edit upstream/main
+            echo "Applying auto-syncable changes from ryanbr/noop at $upstream_sha."
+            git diff --binary HEAD upstream/main -- . \
+              ":(exclude).github/workflows/**" \
+              ":(exclude)altstore-source.json" \
+              > /tmp/upstream-auto-sync.patch
+            git apply --index /tmp/upstream-auto-sync.patch
+            git commit -m "Sync from ryanbr/noop ${upstream_sha:0:8}"
             git push origin HEAD:main
+          fi
+
+          if ! git diff --quiet HEAD upstream/main -- .github/workflows; then
+            echo "::warning::ryanbr/noop has workflow changes. GitHub's default GITHUB_TOKEN cannot push workflow-file updates, so this workflow leaves .github/workflows unchanged for manual review."
           fi
 
       - name: Check fork release assets
