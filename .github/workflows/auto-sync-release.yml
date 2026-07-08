@@ -65,7 +65,7 @@ jobs:
 
           if ! git diff --quiet HEAD upstream/main -- .github/workflows \
             ":(exclude).github/workflows/auto-sync-release.yml"; then
-            echo "::warning::ryanbr/noop has workflow changes. GitHub's default GITHUB_TOKEN cannot push workflow-file updates, so this workflow leaves .github/workflows unchanged for manual review."
+            echo "Note: .github/workflows differs from ryanbr/noop. Workflow files are managed manually in this fork because GitHub's default GITHUB_TOKEN cannot push workflow-file updates."
           fi
 
       - name: Check fork release assets
