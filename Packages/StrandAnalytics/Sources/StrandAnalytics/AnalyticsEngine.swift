@@ -324,6 +324,16 @@ public enum AnalyticsEngine {
                                   // byte-identical default for pure-function callers/tests; IntelligenceEngine
                                   // threads `PuffinExperiment.experimentalSleepV2Enabled`. (V7 / #690)
                                   useSleepStagerV2: Bool = false,
+                                  // Opt-in motion-aware wake refinement (#364 "Proposal 2" follow-up; density
+                                  // gate precedent #345). When true, `WakeMotionRefinement` re-derives each
+                                  // detected session's stages, reclassifying a hot-but-still WAKE segment to
+                                  // `light` when it shows no locomotion and a stable posture outside isolated
+                                  // burst minutes; it only ever runs AFTER V1/V2 staging and self-gates on the
+                                  // observed gravity + step density, so it is a no-op on a sparse (e.g. WHOOP
+                                  // 4.0) night regardless of this flag. Default false keeps every pure-function
+                                  // caller/test byte-identical; IntelligenceEngine threads
+                                  // `PuffinExperiment.motionAwareWakeEnabled`.
+                                  useMotionAwareWake: Bool = false,
                                   // Sleep PROVENANCE for the per-day sleep trace (CAPTURE-C / #799). The
                                   // measured BLE path is `.measured` (the default); the caller passes
                                   // `.imported(...)` when a previously-imported sleep row WON the daily merge,
@@ -361,11 +371,19 @@ public enum AnalyticsEngine {
         func tsInDay(_ ts: Int) -> Bool { (ts + tzOffsetSeconds) >= dayStartUtc && (ts + tzOffsetSeconds) < dayEndUtc }
 
         // ── Sleep detection + staging ─────────────────────────────────────────
-        let allSessions = SleepStager.detectSleep(hr: hr, rr: rr, resp: resp, gravity: gravity,
+        let detectedSessions = SleepStager.detectSleep(hr: hr, rr: rr, resp: resp, gravity: gravity,
                                                   tzOffsetSeconds: tzOffsetSeconds, wristOff: wristOff,
                                                   bandSleepState: bandSleepState,
                                                   useSleepStagerV2: useSleepStagerV2,
                                                   traceSink: traceSink)
+        // Motion-aware wake refinement (#364 follow-up) runs AFTER V1/V2 staging, over every detected
+        // session (naps included — the same eligibility gates apply). `steps` is the SAME calendar-day/
+        // night-window stream the caller passed for the rest of this analysis; the pass self-gates on its
+        // observed density, so an empty/sparse `steps` (e.g. a WHOOP 4.0, which never emits StepSample at
+        // all) is a no-op regardless of `useMotionAwareWake`.
+        let allSessions = useMotionAwareWake
+            ? detectedSessions.map { WakeMotionRefinement.refine($0, grav: gravity, steps: steps) }
+            : detectedSessions
         // Sessions attributed to `day` = those whose end falls on `day` (LOCAL day, #277). `day` is
         // the caller's local-day key; attribute by the same offset so the bucket and the key agree.
         let matched = allSessions.filter { tsInDay($0.end) }
@@ -438,6 +456,9 @@ public enum AnalyticsEngine {
             needHours: sleepNeedHours,
             consistency: sleepConsistency,
             deepSeconds: deepS)
+        // #345: gravity-sparse computed ONCE — reused by the sleep-motion trace below AND the Rest
+        // confidence guard, so the two can never diverge and isGravitySparse runs only once per day.
+        let gravitySparse = SleepStager.isGravitySparse(gravity, hr: hr)
         // Sleep & Rest test mode (E5): emit the Rest sub-score breakdown for this night, reusing the
         // IDENTICAL inputs `restScore` consumed above so the trace can never disagree with the score.
         // `subScoreLine` itself reuses `Rest.composite` for the final value. Side-effect-only; emitted
@@ -453,7 +474,7 @@ public enum AnalyticsEngine {
             // epochs default to sleep → over-counted duration → high Rest). `stager` says whether V1/V2 ran.
             traceSink(AnalyticsEngine.sleepMotionLine(
                 day: day, grav: gravity.count, hr: hr.count,
-                sparse: SleepStager.isGravitySparse(gravity, hr: hr),
+                sparse: gravitySparse,
                 useSleepStagerV2: useSleepStagerV2, family: skinTempFamily))
             // CAPTURE-C (#799): append the sleep PROVENANCE so an imported row winning the merge is visible
             // (not silently swapped for the measured night). hoursAsleep = the scored night's tst in minutes;
@@ -654,23 +675,16 @@ public enum AnalyticsEngine {
         // only — not cloud/clinical parity.
         let stepsTotal: Int? = {
             // Prefer the full-calendar-day stream for the additive total; fall back to the
-            // night-window stream when the caller didn't supply one (pure-function callers/tests).
-            let sorted = (daySteps ?? steps).filter { tsInDay($0.ts) }.sorted { $0.ts < $1.ts }
-            if sorted.count < 2 { return nil }
-            // A delta this large is a big time-gap / disconnect boundary between sync sessions (or a
-            // firmware reboot, byte-indistinguishable from a wrap), NOT real steps — drop it so gaps
-            // don't inflate the total. Real 1 Hz motion never ticks this fast between adjacent records.
-            let maxStepDelta = 512
-            var total = 0
-            for i in 1..<sorted.count {
-                let delta = (sorted[i].counter - sorted[i - 1].counter) & 0xFFFF  // wrap-aware u16 increment
-                if delta >= 1 && delta < maxStepDelta { total += delta }  // ignore a delta >= 512 (gap/reset)
-            }
-            if total <= 0 { return nil }
+            // night-window stream when the caller didn't supply one (pure-function callers/tests). The
+            // day's read window may include adjacent-day samples, so filter to the LOCAL-day key first
+            // (#277); the wrap-aware tick math itself lives in the shared StepsCounter kernel so the daily
+            // and per-workout (#398) totals can never disagree.
+            let inDay = (daySteps ?? steps).filter { tsInDay($0.ts) }
+            guard let ticks = StepsCounter.stepsInWindow(inDay) else { return nil }
             // @57 counts motion ticks, not validated steps — the 5/MG counter overcounts. Divide
             // by the user-calibrated ticks-per-step (default 1.0 = raw pass-through; floor 0.5 so
             // a bad pref can at most double, never explode, the total). (#139)
-            let scaled = Int((Double(total) / max(profile.stepTicksPerStep, 0.5)).rounded())
+            let scaled = Int((Double(ticks) / max(profile.stepTicksPerStep, 0.5)).rounded())
             return scaled > 0 ? scaled : nil
         }()
 
@@ -759,7 +773,7 @@ public enum AnalyticsEngine {
         let restConfidence = ScoreConfidence.rest(hasSession: !matched.isEmpty,
                                                   hasStagedSleep: hasStagedSleep,
                                                   asleepSeconds: tstS, restorativeSeconds: deepS + remS,
-                                                  efficiency: efficiency)
+                                                  efficiency: efficiency, gravitySparse: gravitySparse)
 
         return DayResult(daily: daily, sleepSessions: matched, cachedSleep: cachedSleep,
                          workouts: workouts, recovery: recovery, strain: strain,
