@@ -144,11 +144,15 @@ fun HealthScreen(
     // background" pref (default ON) exactly like Today; OFF passes null so the scaffold paints the flat
     // surface canvas instead.
     val showDayCycleBackground = remember { NoopPrefs.showDayCycleBackground(context) }
+    val skyBehindCards = remember { NoopPrefs.skyBehindCards(context) }
 
     LazyScreenScaffold(
         title = "Health Monitor",
         subtitle = "Live vitals, streamed from the strap.",
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky() } } else null,
+        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way
+        // down (Today / Trends / Sleep / metric-detail parity - same two prefs, same two behaviours).
+        fullBleedBackground = showDayCycleBackground && skyBehindCards,
     ) {
         if (today == null && !hasLiveHr) {
             // Even with no history yet, a freshly-connected strap can be told to sync now (#364) — the
@@ -1985,6 +1989,12 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
     // view isn't showing: Fitness Age with no reading yet -> what it still needs; ANY metric with a single
     // reading -> that reading (trend to follow); two+ -> the trend. Pre-load falls through to trend.
     val loadedPoints = if (seriesLoaded) (detail?.points?.size ?: 0) else -1
+    // #430 parity: the detail carries the SAME backdrop as the screen that pushed it — the day-cycle sky
+    // when the setting is on (full-viewport when "Sky behind cards" is also on, so the transparent cards
+    // reveal it the whole way down; the top band otherwise), the plain canvas when off. Same gates the
+    // Today screen uses.
+    val showDayCycleBackground = remember { NoopPrefs.showDayCycleBackground(context) }
+    val skyBehindCards = remember { NoopPrefs.skyBehindCards(context) }
     ScreenScaffold(
         title = detail?.title ?: "Vital Signs",
         subtitle = when {
@@ -1992,6 +2002,10 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
             loadedPoints == 1 -> "Your latest reading — trend to follow."
             else -> "Historical trend from cached daily metrics."
         },
+        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        // Sky-behind-cards needs the full-viewport container too — the band container's status-bar
+        // offset left the lower cards on plain canvas (tester report).
+        fullBleedBackground = showDayCycleBackground && skyBehindCards,
     ) {
         if (isSeriesBacked && !seriesLoaded) {
             DataPendingNote(
@@ -2335,6 +2349,8 @@ private fun asOfLabel(day: String?): String? {
 
 internal enum class VitalDetailRange(val label: String, val days: Long?) {
     WEEK("W", 7),
+    TWO_WEEK("2W", 14),
+    THREE_WEEK("3W", 21),
     MONTH("M", 30),
     THREE_MONTH("3M", 90),
     SIX_MONTH("6M", 180),
@@ -2354,10 +2370,11 @@ internal fun vitalHistorySpanDays(points: List<Pair<String, Double>>): Long {
  *  LATEST reading, so with under a week of history every window returned the identical full point set
  *  and all six chips drew the same line (a week of data stretched full-width under a "1Y" label). A
  *  range only differs from its predecessor once the data span EXCEEDS the predecessor's window, so the
- *  unlocked set is a contiguous prefix: W always, M once span > 7 days, 3M once > 30, 6M once > 90,
- *  1Y once > 180, ALL once > 365. Locked chips render disabled rather than hidden so a calibrating
- *  user still learns the longer views exist; W staying unconditional means nobody is ever stranded
- *  with zero ranges. */
+ *  unlocked set is a contiguous prefix: W always, 2W once span > 7 days, 3W once > 14, M once > 21,
+ *  3M once > 30, 6M once > 90, 1Y once > 180, ALL once > 365. (The 1D/2D experiment was dropped: daily
+ *  metrics hold at most one point per day, so those windows could never draw a line.) Locked chips render
+ *  disabled rather than hidden so a calibrating user still learns the longer views exist; W (the shortest)
+ *  staying unconditional means nobody is ever stranded with zero ranges. */
 /**
  * The range the chips + caption actually describe, resolved NON-DESTRUCTIVELY (Swift parity with
  * MetricExplorerView.coercedSelection). A locked selection renders as the largest unlocked range with
