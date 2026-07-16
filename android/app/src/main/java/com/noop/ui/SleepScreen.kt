@@ -435,9 +435,9 @@ fun SleepScreen(
                             Toast.makeText(
                                 context,
                                 if (cleared) {
-                                    "Sleep detection reran using the data available for this night."
+                                    uiString(R.string.l10n_sleep_screen_sleep_detection_reran_using_the_data_01757aad)
                                 } else {
-                                    "Couldn't reopen this night. Try again."
+                                    uiString(R.string.l10n_sleep_screen_couldn_t_reopen_this_night_try_88265690)
                                 },
                                 Toast.LENGTH_SHORT,
                             ).show()
@@ -717,9 +717,13 @@ private fun DeletedSleepWindowsCard(
     NoopCard(tint = Palette.restColor) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
             Column(verticalArrangement = Arrangement.spacedBy(Metrics.space2)) {
-                Text("Deleted sleep windows", style = NoopType.headline, color = Palette.textPrimary)
                 Text(
-                    "Recompute a night to clear its deletion marker and scan the available raw data again.",
+                    uiString(R.string.l10n_sleep_screen_deleted_sleep_windows_46fea77a),
+                    style = NoopType.headline,
+                    color = Palette.textPrimary,
+                )
+                Text(
+                    uiString(R.string.l10n_sleep_screen_recompute_a_night_to_clear_its_fd9e15c3),
                     style = NoopType.footnote,
                     color = Palette.textSecondary,
                 )
@@ -733,7 +737,11 @@ private fun DeletedSleepWindowsCard(
                     horizontalArrangement = Arrangement.spacedBy(Metrics.space8),
                 ) {
                     Text(
-                        "${dateFmt.format(Date(marker.startTs * 1000L))} – ${dateFmt.format(Date(marker.endTs * 1000L))}",
+                        uiString(
+                            R.string.l10n_sleep_screen_deleted_sleep_window_range_7bc5f027,
+                            dateFmt.format(Date(marker.startTs * 1000L)),
+                            dateFmt.format(Date(marker.endTs * 1000L)),
+                        ),
                         style = NoopType.footnote,
                         color = Palette.textSecondary,
                         modifier = Modifier.weight(1f),
@@ -742,11 +750,17 @@ private fun DeletedSleepWindowsCard(
                         enabled = recomputing == null,
                         onClick = { onRecompute(marker) },
                         modifier = Modifier.semantics {
-                            contentDescription = "Recompute this deleted sleep night"
+                            contentDescription = uiString(
+                                R.string.l10n_sleep_screen_recompute_this_deleted_sleep_night_2d2f46f6,
+                            )
                         },
                     ) {
                         Text(
-                            if (busy) "Recomputing…" else "Recompute this night",
+                            if (busy) {
+                                uiString(R.string.l10n_sleep_screen_recomputing_6f8e54e3)
+                            } else {
+                                uiString(R.string.l10n_sleep_screen_recompute_this_night_5ba0d05c)
+                            },
                             style = NoopType.subhead,
                             color = if (recomputing == null) Palette.restColor else Palette.textTertiary,
                         )
@@ -754,7 +768,7 @@ private fun DeletedSleepWindowsCard(
                 }
             }
             Text(
-                "If this sleep came only from an import and no raw samples are stored, it may not reappear.",
+                uiString(R.string.l10n_sleep_screen_if_this_sleep_came_only_from_d0892088),
                 style = NoopType.footnote,
                 color = Palette.textTertiary,
             )
