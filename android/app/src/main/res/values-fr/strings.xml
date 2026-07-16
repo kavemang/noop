@@ -931,6 +931,7 @@
     <string name="l10n_app_changelog_fixes_the_experimental_sleep_toggle_now_fc281b7d">Corrections: le somnifère expérimental fonctionne maintenant, l\'étalonnage des étapes, des séances d\'entraînement manuelles sur WHOOP 5/MG, et une lecture de HRV sensée</string>
     <string name="l10n_app_changelog_fixes_the_insights_tab_crash_plus_042d1702">Correction de l\'accident Insights-tab, plus plus précis HRV</string>
     <string name="l10n_app_changelog_french_whoop_exports_now_import_db598ea4">Les exportations françaises de WHOOP importent désormais</string>
+    <string name="l10n_app_changelog_german_french_spanish_pull_to_sync_1109bda2">Allemand, français et espagnol, tirer pour synchroniser dans Aujourd’hui et de nombreuses améliorations</string>
     <string name="l10n_app_changelog_gps_tracked_workouts_android_1cf07bd1">entraînement suivi par GPS (Android)</string>
     <string name="l10n_app_changelog_gps_workout_crash_fix_android_698ee690">Correction d\'accident GPS (Android)</string>
     <string name="l10n_app_changelog_hand_correct_your_sleep_times_smaller_6154b854">Correction manuelle de votre temps de sommeil + petites sauvegardes</string>

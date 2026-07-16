@@ -931,6 +931,7 @@
     <string name="l10n_app_changelog_fixes_the_experimental_sleep_toggle_now_fc281b7d">Fijaciones: el sueño experimental funciona ahora, calibración de pasos, ejercicios manuales en WHOOP 5/MG, y una lectura de HRV sana</string>
     <string name="l10n_app_changelog_fixes_the_insights_tab_crash_plus_042d1702">Arregla el fallo de la marca Insights, más el HRV más preciso</string>
     <string name="l10n_app_changelog_french_whoop_exports_now_import_db598ea4">Exportaciones WHOOP francesas importan ahora</string>
+    <string name="l10n_app_changelog_german_french_spanish_pull_to_sync_1109bda2">Alemán, francés y español, deslizar para sincronizar en Hoy y muchas mejoras</string>
     <string name="l10n_app_changelog_gps_tracked_workouts_android_1cf07bd1">Ejercicios GPS (Android)</string>
     <string name="l10n_app_changelog_gps_workout_crash_fix_android_698ee690">GPS solución de bloqueo de entrenamiento (Android)</string>
     <string name="l10n_app_changelog_hand_correct_your_sleep_times_smaller_6154b854">Corregir el tiempo de sueño + copias de seguridad más pequeñas</string>
