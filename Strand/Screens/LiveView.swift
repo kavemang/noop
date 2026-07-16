@@ -73,6 +73,7 @@ struct LiveView: View {
     /// active. Auto-opens when a workout begins; closing just hides it (the workout keeps recording).
     @State private var showLiveWorkout = false
     @State private var showStartSport = false
+    @State private var confirmingEndWorkout = false
 
     /// Manual HRV snapshot (#127) — presents the "Take an HRV reading" screen as a sheet. Entry sits in
     /// the Session console and is only enabled while bonded (the reading needs the live R-R stream).
@@ -146,6 +147,12 @@ struct LiveView: View {
             HRVSnapshotView(onClose: { showHRVSnapshot = false }, source: hrvSnapshotSource)
                 .environmentObject(model)
                 .environmentObject(live)
+        }
+        .alert("End this workout?", isPresented: $confirmingEndWorkout) {
+            Button("Cancel", role: .cancel) { }
+            Button("End workout", role: .destructive) {
+                model.endWorkout()
+            }
         }
     }
 
@@ -377,7 +384,7 @@ struct LiveView: View {
                     }
                     NoopButton("End workout", systemImage: "stop.circle.fill",
                                kind: .destructive, fullWidth: true) {
-                        model.endWorkout()
+                        confirmingEndWorkout = true
                     }
                 }
             }

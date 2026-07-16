@@ -429,6 +429,7 @@
     <string name="l10n_live_session_screen_session_ring_statelabel_long_press_to_42ac1b3b">Une bague de session. %1$s. Long pression pour montrer la fréquence cardiaque.</string>
     <string name="l10n_live_session_screen_session_summary_f9418e16">Résumé de la séance</string>
     <string name="l10n_live_session_screen_the_strap_signal_was_gone_for_57a2fead">Le signal de la sangle a disparu pendant 10 minutes, donc la séance s\'est terminée.</string>
+    <string name="l10n_end_workout_confirmation_end_this_workout_91ecdb4c">Terminer l’entraînement ?</string>
     <string name="l10n_live_workout_screen_avg_cdc93143">Moy.</string>
     <string name="l10n_live_workout_screen_cadence_68af11f0">Cadence</string>
     <string name="l10n_live_workout_screen_effort_8c974bc6">Effort</string>

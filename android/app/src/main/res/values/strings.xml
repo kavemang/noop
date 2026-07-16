@@ -593,6 +593,7 @@
     <string name="l10n_live_session_screen_session_ring_statelabel_long_press_to_42ac1b3b">Session ring. %1$s. Long-press to show heart rate.</string>
     <string name="l10n_live_session_screen_session_summary_f9418e16">Session summary</string>
     <string name="l10n_live_session_screen_the_strap_signal_was_gone_for_57a2fead">The strap signal was gone for 10 minutes, so the session ended itself.</string>
+    <string name="l10n_end_workout_confirmation_end_this_workout_91ecdb4c">End this workout?</string>
     <string name="l10n_live_workout_screen_avg_cdc93143">Avg</string>
     <string name="l10n_live_workout_screen_cadence_68af11f0">Cadence</string>
     <string name="l10n_live_workout_screen_effort_8c974bc6">Effort</string>

@@ -33,6 +33,7 @@ struct LiveWorkoutView: View {
     /// Read here so we can hold the idle timer off only while this in-exercise screen is up and release it
     /// the moment it leaves, which is exactly the bounded usage Apple asks for. iOS-only (no-op on Mac).
     @AppStorage("workoutKeepScreenOn") private var keepScreenOn = false
+    @State private var confirmingEnd = false
 
     private var zoneSet: HRZoneSet { HRZones.zones(maxHR: Double(model.profile.hrMax)) }
     private var zone: Int { model.bpm.map { zoneSet.zoneNumber(forBPM: Double($0)) } ?? 0 }
@@ -86,6 +87,13 @@ struct LiveWorkoutView: View {
             // Always release on the way out so the system idle timer resumes. Even if the toggle was
             // flipped off mid-workout, this clears any hold we placed.
             ScreenIdle.keepAwake(false)
+        }
+        .alert("End this workout?", isPresented: $confirmingEnd) {
+            Button("Cancel", role: .cancel) { }
+            Button("End workout", role: .destructive) {
+                model.endWorkout()
+                onClose()
+            }
         }
     }
 
@@ -221,8 +229,7 @@ struct LiveWorkoutView: View {
 
     private var endButton: some View {
         NoopButton("End workout", systemImage: "stop.fill", kind: .destructive, fullWidth: true) {
-            model.endWorkout()
-            onClose()
+            confirmingEnd = true
         }
     }
 

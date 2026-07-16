@@ -62,6 +62,7 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
     val effortScale = UnitPrefs.effortScale(context)
     val bpm by vm.bpm.collectAsStateWithLifecycle()
     val activeWorkout by vm.activeWorkout.collectAsStateWithLifecycle()
+    var confirmingEnd by remember { mutableStateOf(false) }
     // Additive: instantaneous speed/cadence/power from a connected standard fitness sensor (RSC/CSC/CPS),
     // read ALONGSIDE HR by the SourceCoordinator's isolated StandardHrSource. Empty (all-null) when no such
     // sensor is feeding, so the readout below hides entirely — a plain HR-only workout looks unchanged. HR
@@ -162,7 +163,7 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
             Spacer(Modifier.height(12.dp))
 
             Button(
-                onClick = { vm.endWorkout(); onClose() },
+                onClick = { confirmingEnd = true },
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 14.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -170,6 +171,17 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
                 ),
             ) { Text(uiString(R.string.l10n_live_workout_screen_end_workout_3e8d6238), style = NoopType.headline) }
         }
+    }
+
+    if (confirmingEnd) {
+        EndWorkoutConfirmationDialog(
+            onConfirm = {
+                confirmingEnd = false
+                vm.endWorkout()
+                onClose()
+            },
+            onDismiss = { confirmingEnd = false },
+        )
     }
 }
 

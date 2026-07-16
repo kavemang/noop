@@ -584,6 +584,7 @@
     <string name="l10n_live_session_screen_session_ring_statelabel_long_press_to_42ac1b3b">Session Ring. %1$s. Long-Press, um die Herzfrequenz anzuzeigen.</string>
     <string name="l10n_live_session_screen_session_summary_f9418e16">Session-Zusammenfassung</string>
     <string name="l10n_live_session_screen_the_strap_signal_was_gone_for_57a2fead">Das Bandsignal war 10 Minuten lang weg, so dass die Sitzung von selbst endete.</string>
+    <string name="l10n_end_workout_confirmation_end_this_workout_91ecdb4c">Workout beenden?</string>
     <string name="l10n_live_workout_screen_avg_cdc93143">Ø</string>
     <string name="l10n_live_workout_screen_cadence_68af11f0">Trittfrequenz</string>
     <string name="l10n_live_workout_screen_effort_8c974bc6">Anstrengung</string>
