@@ -964,9 +964,22 @@ class WhoopBleClient(
         fun dataRangeOldestUnix(frame: ByteArray): Long? = com.noop.protocol.DataRange.oldestUnix(frame)
 
         /** #364 auto-continue cap: consecutive immediate re-kicks per connection before falling back to
-         *  the 900s periodic timer. 6 × ~60s ≈ 6 min of back-to-back draining without letting a
-         *  misbehaving strap monopolise Bluetooth. Mirrors Swift BackfillContinuation.defaultMaxAutoContinues. */
-        const val MAX_AUTO_CONTINUES = 6
+         *  the 900s periodic timer. Guards 1-3 in [shouldAutoContinue] (healthy link, genuine backlog,
+         *  advancing trim, plus the #928/#1012 future-clock exclusion) already stop the pathological cases;
+         *  this cap is only the backstop against a strap that advances its trim but never advances OUR
+         *  frontier (a data-shape spin). #533: at 6, a WELL-BEHAVED deep backlog hit the cap and got
+         *  throttled to the 15-min floor mid-drain (~9s bursts, 15-20 min apart, 95% waiting), so recent
+         *  nights landed hours after waking (which surfaced as a false sleep-detection bug in #515). Raised
+         *  so a typical deep backlog drains in ONE connection: 24 productive passes (~10-15s each) ≈ a few
+         *  minutes of back-to-back draining; the ~24-min backstop only ever bites the rare data-shape spin.
+         *  Mirrors Swift BackfillContinuation.defaultMaxAutoContinues. TUNABLE — needs on-strap validation. */
+        /** #592: sentinel value of [extendedBatteryProbe] between sending the probe and its reply landing. */
+        const val WAITING_EXTENDED_BATTERY_PROBE = "__waiting__"
+
+        /** #592: how long to wait for a probe COMMAND_RESPONSE before treating silence as "no reply". */
+        const val EXTENDED_BATTERY_PROBE_TIMEOUT_MS = 8_000L
+
+        const val MAX_AUTO_CONTINUES = 24
 
         /** #364 "more backlog remains" margin (seconds): how far ahead the strap must be of our persisted
          *  data frontier before we treat it as behind, not clock noise. Matches the Swift
@@ -1037,8 +1050,8 @@ class WhoopBleClient(
          * #1012: a FUTURE-dated [strapNewestTs] (more than [futureSkewSeconds] past the wall clock, #928)
          * not only nulls guard 2a — it also STOPS guard 2b. A future-clock strap banks future-dated
          * records, so the rows it hands over are future-timestamped too and "real rows persisted" is no
-         * evidence of genuine backlog; 2b would chase the future-dated range through the whole cap (six
-         * back-to-back passes, each to its idle timeout — the reported ~15-min sync). The stale/PAST-epoch
+         * evidence of genuine backlog; 2b would chase the future-dated range through the whole cap (every
+         * consecutive pass back-to-back, each to its idle timeout — the reported ~15-min sync). The stale/PAST-epoch
          * case 2b actually exists for (#451) reads BEHIND the frontier, never future-dated, so it is
          * untouched.
          */
@@ -1069,8 +1082,8 @@ class WhoopBleClient(
             // #1012: a future-dated newest also gates 2b, not just 2a. A strap whose clock is set ahead
             // (#928) BANKED future-dated records, so the rows this session persisted are themselves
             // future-timestamped — "real rows" is NOT evidence of genuine backlog there, and 2b used to
-            // chase the future-dated range through the whole cap (six back-to-back passes, each run to
-            // its idle timeout: the reported ~15-min sync). Stop after this single pass; the periodic
+            // chase the future-dated range through the whole cap (every consecutive pass back-to-back,
+            // each run to its idle timeout: the reported ~15-min sync). Stop after this single pass; the periodic
             // floor keeps draining across connects, restoring the pre-#928 single-pass behaviour. The
             // stale/PAST-epoch case 2b exists for (#451) reads BEHIND the frontier, never future-dated,
             // so it falls through untouched below.
@@ -1167,6 +1180,11 @@ class WhoopBleClient(
     /** WHOOP straps seen while [scanningForList] is true (the Add-a-device wizard's present-scan), WITHOUT
      *  auto-connecting. Cleared at the start of each [scanForWhoops]. Empty/unused on the default path. */
     val discoveredWhoops: StateFlow<List<DiscoveredWhoop>> = _discoveredWhoops.asStateFlow()
+
+    // #592 extended-battery probe result text (raw hex + payload triage), null until a probe reply lands.
+    // Drives the Devices result dialog so a capture is readable/copyable without a full log export.
+    private val _extendedBatteryProbe = MutableStateFlow<String?>(null)
+    val extendedBatteryProbe: StateFlow<String?> = _extendedBatteryProbe.asStateFlow()
 
     private val _connectedPeripheralAddress = MutableStateFlow<String?>(null)
     /** The BLE address of the strap currently connected, or null when disconnected. Twin of macOS
@@ -2383,6 +2401,10 @@ class WhoopBleClient(
                 // below. NOT hardware-confirmed on 5/MG — rebootStrap() logs the COMMAND_RESPONSE so a strap
                 // log confirms whether the frame is accepted. User-initiated + confirmation-gated only.
                 cmd != CommandNumber.REBOOT_STRAP &&
+                // GET_EXTENDED_BATTERY_INFO (98) over puffin: read-only opcode probe (#592) — a real
+                // WHOOP 5 (fw 50.38.1.0) already answered this number, proving the frame is at least
+                // accepted. Driven only by probeExtendedBatteryInfo() (user-initiated, Test Centre gated).
+                cmd != CommandNumber.GET_EXTENDED_BATTERY_INFO &&
                 // SET_CONFIG (the R22 deep-stream unlock) is allowed ONLY while the deep-data experiment
                 // is opted in — it writes a persistent feature flag to the strap, so it must never fire
                 // on a default install. Reversible; driven only by enableWhoop5DeepData(). (#174)
@@ -2753,6 +2775,42 @@ class WhoopBleClient(
         }
         sendRebootFrame(variant.command, variant.payload, variant)
     }
+
+    /** #592 opcode probe: send the read-only GET_EXTENDED_BATTERY_INFO(98) and let the COMMAND_RESPONSE
+     *  hook dump the full raw reply to the strap log. The number is disputed (an APK decompile reads 87);
+     *  a battery-shaped payload in the reply confirms 98 on this firmware, a short generic stub keeps it
+     *  ambiguous. Works on both families (the 4.0 is the discriminating device — its firmware banks real
+     *  EXTENDED_BATTERY_INFORMATION event payloads; the 5.0 answered 98 with a stub on fw 50.38.1.0).
+     *  User-initiated only (Devices → strap menu, Test Centre → Connection gated); never automatic. */
+    fun probeExtendedBatteryInfo() {
+        if (!_state.value.connected) {
+            log("Extended-battery probe (#592) ignored — not connected")
+            return
+        }
+        // Sentinel so the Devices dialog can show "waiting for the strap's reply…" until the response lands
+        // (or the user closes it). The COMMAND_RESPONSE hook overwrites this with the decoded result text.
+        _extendedBatteryProbe.value = WAITING_EXTENDED_BATTERY_PROBE
+        log("Extended-battery probe (#592): sending GET_EXTENDED_BATTERY_INFO(98, read-only) on family=$connectedFamily; the raw COMMAND_RESPONSE is dumped below when it lands")
+        send(CommandNumber.GET_EXTENDED_BATTERY_INFO)
+        // #592: if NO COMMAND_RESPONSE for 98 arrives within the window, the silence is itself the verdict —
+        // the firmware served no reply, which is evidence AGAINST 98 (toward the decompile's 87). Surface +
+        // log that instead of a dialog stuck on "waiting" forever. Guarded on the value still being the
+        // sentinel, so a real reply (which overwrites it) is never clobbered by this late timeout.
+        handler.postDelayed({
+            val msg = "Extended-battery probe (#592): no COMMAND_RESPONSE for opcode 98 within " +
+                "${EXTENDED_BATTERY_PROBE_TIMEOUT_MS / 1000}s — the strap served no reply. That silence " +
+                "is evidence AGAINST 98 on this firmware (toward the decompile's 87); a gated 87 probe is " +
+                "the follow-up. (If a sync/offload was mid-flight the response can be delayed — retry idle.)"
+            // ATOMIC compare-and-set: only replace the still-waiting sentinel. If a real reply landed on the
+            // binder thread in the meantime (even microseconds before this fires at the timeout boundary),
+            // it already overwrote the value and the CAS fails — so a genuine capture is never clobbered by
+            // a late "no reply". Log only when the CAS actually wins.
+            if (_extendedBatteryProbe.compareAndSet(WAITING_EXTENDED_BATTERY_PROBE, msg)) log(msg)
+        }, EXTENDED_BATTERY_PROBE_TIMEOUT_MS)
+    }
+
+    /** Clear the #592 probe result (Devices dialog dismissed). */
+    fun clearExtendedBatteryProbe() { _extendedBatteryProbe.value = null }
 
     /** Shared reboot send + debug trail + watchdog, used by both the production [rebootStrap] and the
      *  4.0 [rebootProbe]. `probe == null` is the normal restart; a non-null variant is a probe attempt
@@ -3833,6 +3891,58 @@ class WhoopBleClient(
                     // stays: on 5/MG it lands word-aligned with the body at 11, and a straddling word
                     // can't fall in the unix-range window. (#78 fork)
                     val cmdOff = if (connectedFamily == DeviceFamily.WHOOP5) 10 else 6
+                    // #592 opcode probe: dump the raw GET_EXTENDED_BATTERY_INFO(98) response in FULL (no
+                    // prefix cap — the tail fields are the evidence) so a normal strap-log export settles
+                    // the disputed number: a battery-shaped payload (mV etc.) confirms 98 on this firmware;
+                    // a short generic stub keeps it ambiguous (see the probe note on the enum case).
+                    if (frame.size > cmdOff && (frame[cmdOff].toInt() and 0xFF) == CommandNumber.GET_EXTENDED_BATTERY_INFO.rawValue) {
+                        // Build the #592 result as text lines, then BOTH log them (so they ride the strap-log
+                        // bundle) AND publish them to a StateFlow the Devices probe dialog shows + copies —
+                        // so a capture doesn't require a full log export to read/share.
+                        val lines = ArrayList<String>(3)
+                        lines.add("Extended-battery probe raw response (#592 — full frame, len=${frame.size}): " +
+                            frame.joinToString("") { "%02x".format(it) })
+                        // 5/MG replies carry an explicit result code @12 (0 FAILURE / 1 SUCCESS / 2 PENDING /
+                        // 3 UNSUPPORTED — 3 is hardware-confirmed as the MG's rejection code, #48). UNSUPPORTED
+                        // here is a DECISIVE #592 verdict: the firmware itself says opcode 98 isn't a command.
+                        if (connectedFamily == DeviceFamily.WHOOP5 && frame.size > 12) {
+                            val r = frame[12].toInt() and 0xFF
+                            val label = when (r) {
+                                0 -> "FAILURE"; 1 -> "SUCCESS"; 2 -> "PENDING"; 3 -> "UNSUPPORTED"
+                                else -> "result$r"
+                            }
+                            lines.add("Result code (#592, 5/MG @12): $label($r)" +
+                                if (r == 3) " — the firmware explicitly does NOT recognise opcode 98; the decompile's 87 becomes the live candidate (gated follow-up)" else "")
+                        }
+                        // #592 payload triage: is there more here than the mV word NOOP already gets from the
+                        // ordinary battery event? Report the payload length and every 16-bit LE word with its
+                        // offset, tagging the mV-band ones (3000-4300) vs OTHER in-range values. Bound the scan
+                        // to the DECODABLE payload, excluding the 4-byte CRC32 trailer both families carry
+                        // (total frame = length + 4), so the CRC never reads as a phantom "candidate field".
+                        val payStart = cmdOff + 1
+                        val payEnd = frame.size - 4
+                        if (payEnd > payStart) {
+                            val pay = frame.copyOfRange(payStart, payEnd)
+                            val words = StringBuilder()
+                            var o = 0
+                            while (o + 1 < pay.size) {
+                                val v = (pay[o].toInt() and 0xFF) or ((pay[o + 1].toInt() and 0xFF) shl 8)
+                                val tag = when {
+                                    v in 3000..4300 -> "mV?"      // battery voltage band (already known)
+                                    v in 1..0xFFFE -> "other"     // any other non-trivial word — candidate field
+                                    else -> null
+                                }
+                                if (tag != null) words.append(" @$o=$v($tag)")
+                                o += 1
+                            }
+                            lines.add("Payload (#592): len=${pay.size} bytes (CRC excluded), overlapping 16-bit LE words:$words " +
+                                "— words BEYOND an mV are unmapped candidate fields (cycle count / health / temp?); mV-only or none ⇒ no new data over the battery event")
+                        } else {
+                            lines.add("Payload (#592): no payload beyond the command byte (bare stub) ⇒ no data over the battery event; opcode 98 may be an unknown-command ack on this firmware")
+                        }
+                        lines.forEach { log(it) }
+                        _extendedBatteryProbe.value = lines.joinToString("\n\n")
+                    }
                     if (frame.size > cmdOff && (frame[cmdOff].toInt() and 0xFF) == CommandNumber.GET_DATA_RANGE.rawValue) {
                         // #451: dump raw GET_DATA_RANGE response bytes unconditionally (even if decode returns
                         // null) so a stale/wrong-epoch "newest" can be told apart from a frame-alignment bug in
