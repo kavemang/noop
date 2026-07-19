@@ -349,23 +349,12 @@ struct LiquidTodayView: View {
     static let pullSpace = "liqTodayScroll"
 
     /// Reserves the revealed space at the top and shows a vessel that fills with the pull, then sloshes
-    /// while the refresh runs.
+    /// while the refresh runs. A plain computed property (not a LiveState-isolated leaf) — it doesn't read
+    /// LiveState itself, so it's cheap to re-evaluate as part of the main body. It hands the actual
+    /// visibility decision to `LiquidRefreshIndicator` below, which DOES own LiveState.
     private var liquidRefreshIndicator: some View {
-        let progress = min(1, max(0, pullY / pullThreshold))
-        return ZStack {
-            if refreshing {
-                LiquidVessel(value: 0.6, tint: liquidHeart, animated: true)
-                    .frame(width: 34, height: 34)
-            } else if pullY > 2 {
-                LiquidVessel(value: progress, tint: liquidHeart, animated: false)
-                    .frame(width: 30, height: 30)
-                    .opacity(progress)
-                    .scaleEffect(0.7 + 0.3 * progress)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: refreshing ? 64 : min(pullY, pullThreshold * 1.15))
-        .animation(.easeOut(duration: 0.22), value: refreshing)
+        LiquidRefreshIndicator(pullY: pullY, pullThreshold: pullThreshold, refreshing: refreshing,
+                               liquidHeart: liquidHeart)
     }
 
     /// Arm the refresh once the pull passes the threshold; FIRE it when the finger releases (the pull
@@ -1408,6 +1397,75 @@ private struct HeroScoreCell: View {
 
 
 // MARK: - Scene controls (LiveState-isolated leaves)
+
+/// The liquid pull-to-refresh vessel + a "Syncing…" label. Owns LiveState (isolated leaf, per the file's
+/// convention — see `LiquidLiveHR`) so a live-HR notify doesn't re-render the whole Today, but the vessel
+/// still knows about an ONGOING strap backfill.
+///
+/// Visibility used to be driven only by the local `refreshing` flag, which flips false ~350ms after the
+/// pull releases (once the local repo reload + a short "let the fill read as done" delay complete) — but
+/// `ble.syncNow()` kicks off a real BLE history offload that can run far longer than that. The vessel was
+/// disappearing while the strap was still mid-sync, with no feedback beyond the easy-to-miss header
+/// `SyncStatusChip`. `syncing` now also holds it (and the label) up while `live.backfilling` is true, so
+/// releasing the pull and watching it go away actually means the sync finished.
+private struct LiquidRefreshIndicator: View {
+    let pullY: CGFloat
+    let pullThreshold: CGFloat
+    let refreshing: Bool
+    let liquidHeart: Color
+
+    @EnvironmentObject private var live: LiveState
+
+    private var progress: CGFloat { min(1, max(0, pullY / pullThreshold)) }
+
+    /// The RAW "a sync is happening" signal. `live.backfilling` toggles false→true between EVERY offload
+    /// chunk (`exitBackfilling` at each HISTORY_END → auto-continue re-kick → `beginBackfill`), with a real
+    /// BLE round-trip gap in between. A deep backlog is now up to ~24 chunks in ONE connection (#594 raised
+    /// the auto-continue cap 6→24), so binding the vessel straight to this strobes it in/out on every chunk
+    /// boundary. The MenuBar header pins a constant height for exactly this reason (see MenuBarContent).
+    private var syncingRaw: Bool { refreshing || live.backfilling }
+
+    /// Debounced visibility that drives the body: goes true INSTANTLY, but only goes false after riding out
+    /// [hideDelay] with no new chunk — so a brief per-chunk `backfilling` gap can't flicker the vessel.
+    @State private var syncing = false
+    @State private var hideTask: Task<Void, Never>?
+    private static let hideDelaySeconds: UInt64 = 3   // comfortably longer than an inter-chunk gap
+
+    var body: some View {
+        ZStack {
+            if syncing {
+                VStack(spacing: 6) {
+                    LiquidVessel(value: 0.6, tint: liquidHeart, animated: true)
+                        .frame(width: 34, height: 34)
+                    Text("Syncing…")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                }
+            } else if pullY > 2 {
+                LiquidVessel(value: progress, tint: liquidHeart, animated: false)
+                    .frame(width: 30, height: 30)
+                    .opacity(progress)
+                    .scaleEffect(0.7 + 0.3 * progress)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: syncing ? 64 : min(pullY, pullThreshold * 1.15))
+        .animation(.easeOut(duration: 0.22), value: syncing)
+        .onAppear { syncing = syncingRaw }
+        .onChangeCompat(of: syncingRaw) { raw in
+            hideTask?.cancel()
+            if raw {
+                syncing = true                       // a sync (or pull) is active — show at once
+            } else {
+                // Might just be the gap between two chunks — wait it out; a new chunk cancels this.
+                hideTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: Self.hideDelaySeconds * 1_000_000_000)
+                    if !Task.isCancelled { syncing = false }
+                }
+            }
+        }
+    }
+}
 
 /// Quick-actions "+" button. Tap → the shell's quick-action menu.
 /// #today-layout: the Arrange sheet — reorder the Today sections by dragging rows (SwiftUI's native
