@@ -1945,6 +1945,17 @@ final class Repository: ObservableObject {
         return out
     }
 
+    /// Distinct local-day keys (yyyy-MM-dd) in the inclusive range [from, to] that carry at least one
+    /// NATIVE journal entry (the "noop-journal" device id only — matching the Android widget's
+    /// `repo.journal(JOURNAL_DEVICE_ID, from, to)`). Backs the #627 Today journal widget's completion
+    /// strip. Read-only.
+    func nativeJournalDays(from: String, to: String) async -> Set<String> {
+        guard let store = await ensureStore() else { return [] }
+        let rows = (try? await store.journalEntries(deviceId: Self.journalDeviceId,
+                                                    from: from, to: to)) ?? []
+        return Set(rows.map { $0.day })
+    }
+
     /// Union; the NATIVE row wins per (day, question) , the in-app answer is the user's most recent
     /// explicit action and stays editable, unlike the immutable imported history.
     nonisolated static func mergeJournal(imported: [JournalEntry], native: [JournalEntry]) -> [JournalEntry] {
@@ -2485,6 +2496,19 @@ final class Repository: ObservableObject {
         let tiz = HRZones.timeInZone(samples, zoneSet: zoneSet)
         let minutes = tiz.seconds.map { $0 / 60.0 }
         return minutes.contains(where: { $0 > 0 }) ? minutes : nil
+    }
+
+    /// HRR for one workout (#516), derived from the final five minutes of recorded effort plus the five
+    /// post-workout minutes. This is a narrow read (at most ~10 minutes), not a whole-workout scan, and the
+    /// pure engine owns every eligibility/coverage guard. Missing post-workout HR therefore returns nil
+    /// instead of fabricating a recovery value. Kotlin twin: `AppViewModel.workoutHeartRateRecovery`.
+    func workoutHeartRateRecovery(from: Int, to: Int, maxHR: Double) async -> HeartRateRecovery.Result? {
+        guard to > from, maxHR > 0 else { return nil }
+        let readFrom = max(from, to - HeartRateRecovery.eligibilityLookbackSeconds)
+        let readTo = to + 5 * 60 + HeartRateRecovery.measurementToleranceSeconds
+        let samples = await hrSamples(from: readFrom, to: readTo, limit: 2_000)
+        return HeartRateRecovery.calculate(samples: samples, workoutStart: from, workoutEnd: to,
+                                           maxHR: maxHR)
     }
 
     /// Apple Health daily aggregates (steps/energy/vo2/hr).
