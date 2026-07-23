@@ -463,7 +463,10 @@ object IntelligenceEngine {
             // scored-days loop, NOT here). Only when the universal sink is on. A day skipped below for too
             // few rows is never scored, so it emits no line, byte-identical to the iOS behaviour.
             if (universalSink != null) readOwnerByDay[day] = OwnerRead(owner, hr.size)
-            if (hr.size < MIN_HR_SAMPLES) continue // need real raw data, not a stray sample
+            if (hr.size < MIN_HR_SAMPLES) {
+                diag("sleep day=$day SKIPPED hrSamples=${hr.size} (need ≥$MIN_HR_SAMPLES)")
+                continue
+            }
             val rr = repo.rrIntervals(owner, from, to, STREAM_LIMIT)
             val resp = repo.respSamples(owner, from, to, STREAM_LIMIT)
             val grav = repo.gravitySamples(owner, from, to, STREAM_LIMIT)
@@ -605,9 +608,12 @@ object IntelligenceEngine {
                 // from the always-on log instead of hand-computing beat density.
                 val ts = sleepRrRows.map { it.ts }
                 val cov = String.format(java.util.Locale.US, "%.2f", HrvAnalyzer.rrCoverage(ts, sleepRr))
+                // #550: collapsedCov previews a same-second R-R de-dup — well below `coverage` ⇒ the
+                // over-count is same-second (a dedup fix would work); still high ⇒ cross-second overlap.
+                val colCov = String.format(java.util.Locale.US, "%.2f", HrvAnalyzer.collapsedCoverage(ts, sleepRr))
                 val dup = HrvAnalyzer.duplicateBeatCount(ts, sleepRr)
                 diag("hrv diag day=${res.daily.day} rmssd=${ms(h.rmssd)}ms sdnn=${ms(h.sdnn)}ms meanNN=${ms(h.meanNN)}ms " +
-                    "rr=${h.nInput}/${h.nClean} rejected=$rej% coverage=$cov dupBeats=$dup")
+                    "rr=${h.nInput}/${h.nClean} rejected=$rej% coverage=$cov collapsedCov=$colCov dupBeats=$dup")
             }
 
             // Steps test mode: emit the 5/MG raw-counter trace for this day (cumulative @57 series +
@@ -901,9 +907,23 @@ object IntelligenceEngine {
                 // though their sports differ , the #975 "two workouts, one vanished" seam. Name the collider.
                 val collider = realWorkouts.firstOrNull { w -> s.start < w.endTs && w.startTs < s.end }
                 if (collider != null) {
+                    // #510: the detected bout's own avgHR/calories/maxHR/strain come from the SAME
+                    // motion+HR trace the detector used to find this activity's actual boundaries —
+                    // often a tighter match than the colliding row's own [startTs,endTs] (e.g. a manual
+                    // entry typed in afterward, whose guessed boundaries can clip most of the real
+                    // HR-rich period and leave WhoopRepository.fillWorkoutHrFromStrap's raw window read
+                    // too thin, silently showing no HR/calories). Same natural key (deviceId, startTs,
+                    // sport), so the upsert below updates the existing row in place rather than
+                    // duplicating it.
+                    val backfilled = backfillWorkoutFromDetectedBout(
+                        collider, avgBpm = avgBpm, peakHR = s.peakHR, caloriesKcal = s.caloriesKcal, strain = s.strain,
+                    )
+                    val didBackfill = backfilled != collider
+                    if (didBackfill) workoutRows.add(backfilled)
                     workoutsTraceSink?.invoke(
                         WorkoutsTrace.detectedBoutLine(
-                            verdict = "droppedOverlap", durMin = durMin, avgBpm = avgBpm,
+                            verdict = if (didBackfill) "droppedOverlapBackfilled" else "droppedOverlap",
+                            durMin = durMin, avgBpm = avgBpm,
                             overlapSource = colliderSourceLabel(collider.source),
                         ),
                     )
@@ -1232,6 +1252,25 @@ object IntelligenceEngine {
             else -> "apple"
         }
     }
+
+    /**
+     * #510: backfill ONLY the avgHr/maxHr/energyKcal/strain fields [real] doesn't already have, from a
+     * detected bout's own computed values — never touching a field that's already present, whether
+     * typed by the user, imported, or filled by an earlier pass. Returns [real] unchanged (`==`) when it
+     * already had everything, so the caller can tell whether a write is actually needed.
+     */
+    internal fun backfillWorkoutFromDetectedBout(
+        real: WorkoutRow,
+        avgBpm: Int,
+        peakHR: Int,
+        caloriesKcal: Double?,
+        strain: Double?,
+    ): WorkoutRow = real.copy(
+        avgHr = real.avgHr ?: avgBpm,
+        maxHr = real.maxHr ?: peakHR,
+        energyKcal = real.energyKcal ?: caloriesKcal,
+        strain = real.strain ?: strain,
+    )
 
     /**
      * #137: re-score under-sampled manual workouts. Conservative + idempotent: only `manual` rows that
