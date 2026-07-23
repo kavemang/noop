@@ -90,6 +90,52 @@ that otherwise reproduced flags 1–15 byte-for-byte in this order.
   we map the type-`0x2F` layout (documented as HR @ byte 14, accel x/y/z float32 @ 37/41/45) and feed the
   motion into NOOP's existing v25-style sleep stager.
 
+## Why SpO₂ (and the raw respiration track) aren't available on 5.0
+
+This is the single most common "is it broken?" report (e.g. [#623](https://github.com/ryanbr/noop/issues/623)),
+so the reasoning in one place:
+
+**It is not an encryption problem.** NOOP decodes the entire 5.0 (v18) record in plaintext — HR, R-R,
+sleep, and the whole optical tail. Nothing on the wire is hidden behind a cipher NOOP would need a key
+for. The barrier is that the SpO₂ data simply isn't *in* the stream in a usable form:
+
+- **No *confirmed* SpO₂ field on the 5.0 wire — but there is now a candidate.** The raw optical tail
+  (`@106` baseline, `@108/@109` amplitude pair, `@113` float) was checked against WHOOP-app SpO₂ across
+  18,602 real records — it does not match; those channels track HR/motion, and there is no identifiable
+  red/IR pair. Pulse oximetry fundamentally needs two wavelengths; the 5.0's decodable stream doesn't
+  expose them (the v26 PPG waveform is single-channel, HR only). However, a decompile-sourced decode
+  ([#103](https://github.com/ryanbr/noop/issues/103)) reads v18 byte `@82` as a **strap-computed SpO₂ %
+  scalar** (tri-mode: 70–100 = real %, bit-7 = saturation sentinel, other sub-70 = diagnostic code;
+  sleep-only). The evidence is currently **split**: an 8-night independent validation with real spread
+  (corr +0.99, ~0.4 %/night) clears the cross-night bar, but the two nights checked on the original #103
+  capture device moved *opposite* to the app value — unresolved device/firmware variance or an extraction
+  error on one side. NOOP therefore decodes `@82` as `spo2_candidate_82` (deep-timeline instrumentation
+  only, in-band values only) so more devices can correlate it against the app's nightly SpO₂; it does
+  **not** populate `spo2Pct` or any card/score until the contradiction is resolved.
+- **A calibrated % needs WHOOP's proprietary curve.** Even where raw optical exists, turning a red/IR
+  ratio into a real SpO₂ % requires a device-specific calibration NOOP does not have — and NOOP will not
+  fabricate one from unvalidated optical (the withdrawn #194 PPG→HR estimate is the cautionary
+  precedent). `spo2Pct` is therefore nulled for *every* WHOOP; only an import writes it.
+
+**WHOOP 4.0 differs.** The 4.0 **v24** historical layout *does* bank raw SpO₂ channels (`spo2_red@68` /
+`spo2_ir@70`), so NOOP decodes the raw red/IR there (still not a calibrated %). The 5.0's v18 layout
+dropped those channels — most likely SpO₂ moved to a value computed on-device / in WHOOP's cloud rather
+than banked in the offload NOOP reads. NOOP reverse-engineers what the strap actually sends; if a
+decodable SpO₂ isn't sent, there is nothing to decode, plaintext or not.
+
+**Respiration is a partial exception.** The 5.0 sends no raw respiration ADC stream either (also
+4.0-v24-only), so the deep-timeline *track* is empty — but respiration is still estimated on-device from
+the R-R interval stream (RSA) and shown on the Health screen when enough overnight R-R is captured.
+
+**To see SpO₂ in NOOP on a 5.0:** import it. A WHOOP data export carries `blood_oxygen_pct`, and Health
+Connect import works too — both populate the Blood Oxygen card with WHOOP's own computed values.
+
+**Could it ever change?** Only via research, not decryption — and the `@82` candidate above is exactly
+that research in progress. What would flip it to a real reading: the `spo2_candidate_82` nightly values
+tracking the WHOOP app's own SpO₂ across many nights on **multiple devices** (a varying signal, not one
+coincidental match), including on the device where the two checked nights currently move opposite.
+Until that clears the bar, SpO₂ stays import-only on the 5.0.
+
 ## Mapping the layout — ground-truth correlation
 
 An HCI capture on its own is a pile of un-labelled bytes. The fast way to label them is *known

@@ -22,9 +22,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -62,7 +64,6 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
     val effortScale = UnitPrefs.effortScale(context)
     val bpm by vm.bpm.collectAsStateWithLifecycle()
     val activeWorkout by vm.activeWorkout.collectAsStateWithLifecycle()
-    var confirmingEnd by remember { mutableStateOf(false) }
     // Additive: instantaneous speed/cadence/power from a connected standard fitness sensor (RSC/CSC/CPS),
     // read ALONGSIDE HR by the SourceCoordinator's isolated StandardHrSource. Empty (all-null) when no such
     // sensor is feeding, so the readout below hides entirely — a plain HR-only workout looks unchanged. HR
@@ -95,6 +96,10 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
 
     val zoneSet = remember(profile.hrMax) { HrZones.zones(maxHR = profile.hrMax.toDouble()) }
     val zone = bpm?.let { zoneSet.zoneNumber(it.toDouble()) } ?: 0
+
+    // Guards the destructive End action behind a confirm (#517) — a stray tap on the full-width
+    // button used to end the workout instantly with no way back.
+    var showEndConfirm by remember { mutableStateOf(false) }
 
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(w.startMs) {
@@ -163,7 +168,7 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
             Spacer(Modifier.height(12.dp))
 
             Button(
-                onClick = { confirmingEnd = true },
+                onClick = { showEndConfirm = true },
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 14.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -173,14 +178,40 @@ fun LiveWorkoutScreen(vm: AppViewModel, onClose: () -> Unit) {
         }
     }
 
-    if (confirmingEnd) {
-        EndWorkoutConfirmationDialog(
-            onConfirm = {
-                confirmingEnd = false
-                vm.endWorkout()
-                onClose()
+    // Confirm before ending (#517): a stray tap on "End workout" used to stop the session and
+    // discard the in-progress recording with no way back.
+    if (showEndConfirm) {
+        AlertDialog(
+            onDismissRequest = { showEndConfirm = false },
+            containerColor = Palette.surfaceOverlay,
+            title = {
+                Text(
+                    uiString(R.string.l10n_live_workout_screen_end_this_workout_4869c76a),
+                    style = NoopType.title2, color = Palette.textPrimary,
+                )
             },
-            onDismiss = { confirmingEnd = false },
+            text = {
+                Text(
+                    uiString(R.string.l10n_live_workout_screen_this_stops_recording_and_saves_what_3e17a23e),
+                    style = NoopType.subhead, color = Palette.textSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showEndConfirm = false; vm.endWorkout(); onClose() }) {
+                    Text(
+                        uiString(R.string.l10n_live_workout_screen_end_workout_3e8d6238),
+                        style = NoopType.body, color = Palette.statusCritical,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndConfirm = false }) {
+                    Text(
+                        uiString(R.string.l10n_live_workout_screen_cancel_77dfd213),
+                        style = NoopType.body, color = Palette.textSecondary,
+                    )
+                }
+            },
         )
     }
 }

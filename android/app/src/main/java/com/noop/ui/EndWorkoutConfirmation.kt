@@ -7,10 +7,10 @@ import androidx.compose.runtime.Composable
 import com.noop.R
 
 /**
- * Shared destructive confirmation for every manual-workout stop affordance (#517).
+ * Shared destructive confirmation for compact manual-workout stop affordances (#517).
  *
- * Keeping the dialog in one place prevents the compact Live/Workouts cards and the full-screen
- * workout view from drifting back to one-tap termination independently.
+ * Keeping the dialog in one place prevents the compact Live/Workouts cards from drifting back to
+ * one-tap termination independently. The full-screen view owns the same copy in its richer layout.
  */
 @Composable
 internal fun EndWorkoutConfirmationDialog(
@@ -22,9 +22,16 @@ internal fun EndWorkoutConfirmationDialog(
         containerColor = Palette.surfaceOverlay,
         title = {
             Text(
-                uiString(R.string.l10n_end_workout_confirmation_end_this_workout_91ecdb4c),
+                uiString(R.string.l10n_live_workout_screen_end_this_workout_4869c76a),
                 style = NoopType.title2,
                 color = Palette.textPrimary,
+            )
+        },
+        text = {
+            Text(
+                uiString(R.string.l10n_live_workout_screen_this_stops_recording_and_saves_what_3e17a23e),
+                style = NoopType.subhead,
+                color = Palette.textSecondary,
             )
         },
         confirmButton = {
@@ -39,7 +46,7 @@ internal fun EndWorkoutConfirmationDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(
-                    uiString(R.string.l10n_workout_start_cancel_77dfd213),
+                    uiString(R.string.l10n_live_workout_screen_cancel_77dfd213),
                     style = NoopType.body,
                     color = Palette.textSecondary,
                 )

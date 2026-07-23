@@ -17,6 +17,67 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 9.1.0: Workout backfill, strap model fix, supply chain hardening, and Oura improvements (all platforms)
+
+A reliability-and-accuracy release on top of 9.0.2.
+
+**New**
+
+- **Diagnostic WHOOP GATT family detection (#688, #713).** NOOP now scans for and logs the additional WHOOP service families (Puffin, Monument, Symphony) seen in the decompiled app. Detected-but-unsupported straps get a clear log message instead of being silently missed.
+- **WHOOP 5.0 SpO2 candidate instrumentation (#103, #709).** The v18 byte @82 is now decoded as an instrumentation-only SpO2 candidate for multi-device correlation — not a shipped metric, per the derived-biosignal rule.
+- **Oura feature-status probe (#710).** A read-only diagnostic confirms from the ring itself that SpO2 and real-steps are server-flag-gated off for offline rings.
+- **Configurable bundle ID and team for iOS builds (#701, #722).** A single gitignored xcconfig file now drives every target's bundle ID, App Group, and development team — no more hand-editing project.yml in six places after every xcodegen run.
+
+**Fixed**
+
+- **Seeded WHOOP device showed wrong model and broken skin temp (#716, #719).** The default "my-whoop" device had model "WHOOP" (no generation), causing `forRegistryModel` to return the wrong family. Skin temp used the wrong ADC scale and the Devices screen showed "Exact model unknown." Now stamped to the correct family on first BLE scan.
+- **Manual workouts showed no HR or calories (#510, #708).** When the auto-workout detector found the same activity a user manually logged, it discarded its computed HR/calories instead of backfilling the manual entry. Fixed — missing fields are now filled from the detector's own values without overriding anything the user typed.
+- **Journal import zeroed out every answer from a real WHOOP export (#631, #706).** The real WHOOP export column is "Answered yes", not "Answered yes/no" — every imported journal entry silently read as "Without."
+- **Sleep Schedule card drew phantom bars from night-tail fragments (#699, #703).** The card now bridges split/biphasic nights the same way the hero does.
+- **Steps calibration slider was unusable (#698, #704).** Replaced with a stepper (0.1 increments), matching the Profile card pattern.
+- **Backfill clock retry (#700, #721).** If the strap silently drops the GET_CLOCK response, NOOP now retries up to 3 times, then falls back to a rough correlation from the Data Range timestamp — preventing all rows from landing on the wrong day.
+- **Oura IBI timestamps were wrong (#677).** Banked overnight beats were stamped at the drain-arrival time instead of their real ring-time, leaving the sleep window with zero R-R data.
+
+**Diagnostics**
+
+- **Log why a day is skipped for sleep (#714, #720).** When a day has fewer than 200 HR samples, the strap log now says so — immediately answers "no data" vs "data but no sleep found."
+- **Alarm HR diagnostic (#34, #707).** Live HR at alarm arm time is now logged to help investigate the evening-alarm hypothesis.
+
+**Infrastructure**
+
+- **Android Gradle supply chain hardened (#658, #683).** Dependency locking, SHA-256 verification for all artifacts, and a checked-in Gradle 8.7 wrapper with pinned distribution checksum.
+- **Code quality refactors (#665, #686, #711, #712).** Today, Sleep, and Health screens' pure helper logic extracted into sibling files — no behavior change.
+- **Oura protocol docs updated (#678).** IBI decode, wear/charge signal, observed tags, and feature-status probe documented.
+
+---
+
+## 9.0.2: Optimal-strain alerts, faster history sync, and a wave of accuracy fixes (all platforms)
+
+A feature-and-accuracy release on top of 9.0.1.
+
+**New**
+
+- **"Optimal strain reached" notification (#593).** Opt in and NOOP buzzes once when your day's effort lands in the optimal range for your recovery. Off by default; it only fires for the day you're actually building, never for a backfilled past day.
+- **Strap pack voltage in Devices (#592).** Alongside the battery percent, NOOP now shows the strap's measured pack voltage — a truer read of remaining charge than the percentage alone.
+- **Faster history sync (experimental, #533).** New opt-in toggles ask the strap for a higher-priority connection and a faster radio mode during a history offload, so a deep backlog drains in fewer, quicker syncs. Off by default while it's being proven out.
+- **Recompute a sleep you deleted (#526).** Removing a bad sleep window no longer leaves a hole — you can ask NOOP to recompute the night from the raw stream.
+
+**Fixed**
+
+- **Multi-strap workouts showed blank heart rate and calories (#512, #513).** Workout heart rate is now read under the strap that actually recorded the session, not a hardcoded device, so second-strap workouts fill in correctly (iPhone, Mac, Android).
+- **Today steps counted from the wrong source (#551, #574, #575).** Steps now route by their real source and blend an imported Apple Health count where present, matching Android.
+- **Foot-sport step counts were half of reality (#568).** Activity-file imports now double the reported cycle count into steps for running and walking sports.
+- **Oura IBI (heartbeat-interval) imports decoded wrong (#511).** The 0x60/0x80 decoders now match the ring's real byte layout.
+- **The morning recap could fire twice or on the wrong day (#567).** Its once-per-recap gate is keyed to the night it banked, not the calendar day.
+- **Sleep time edits are now saved atomically (#525),** so an interrupted edit can't leave a half-written night.
+- **Pull-to-sync polish on Today (#582, #587, #590).** The pull indicator shows "Syncing…", stays up for the real backfill instead of flickering per chunk, and hides at rest — it only appears when you pull.
+- **iPhone now actually asks for notification permission during onboarding (#591),** so alerts you enable can be delivered.
+- **Stress marker values stay readable (#507),** and Android's battery dialog no longer contradicts Settings (#539).
+
+**Also:** real plural forms and translation fixes across the app (#541–#544, #559), and WHOOP 5.0/MG decode groundwork continues under the hood.
+
+---
+
 ## 9.0.1: German, French & Spanish, pull-to-sync on Today, and a wave of polish (all platforms)
 
 A polish-and-translation release on top of 9.0.0.

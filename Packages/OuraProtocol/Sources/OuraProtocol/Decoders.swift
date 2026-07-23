@@ -61,7 +61,7 @@ public enum OuraDecoders {
     /// from the b[12]/b[13] nibbles>`. Amplitude = `(b[6+k] >> 1) << shift`, exponent = low nibble of
     /// b[13] (shift = (n==7) ? 0 : n+1). Returns nil on a short body.
     ///
-    /// NOTE (#—, decode fix): the previous layout read the body as a linear MSB-first bitstream, which
+    /// NOTE (#511, decode fix): the previous layout read the body as a linear MSB-first bitstream, which
     /// only ever recovered the FIRST IBI correctly and scrambled the other five — a real overnight
     /// capture decoded to an 82% beat-to-beat >200ms "jump" rate (not a heartbeat train). This
     /// byte-scatter layout, cross-checked against the same capture, yields a coherent ~60 bpm train
@@ -98,7 +98,7 @@ public enum OuraDecoders {
     /// (300..2000 ms). Up to 7 samples per 14-byte record. Per the native `parse_api_green_ibi_quality
     /// _event`. Returns nil on a short body.
     ///
-    /// NOTE (#—, decode fix): the previous layout read a little-endian u16 and masked bits 0-10, placing
+    /// NOTE (#511, decode fix): the previous layout read a little-endian u16 and masked bits 0-10, placing
     /// the high byte in the LOW bits — a bit-order error that scrambled the interval (real-capture
     /// within-record jitter 583ms). This high-byte-first layout with the `quality == 1` gate yields a
     /// clean beat train (45ms jitter) and keeps MORE good beats. Validated against `open_oura`.
@@ -331,6 +331,19 @@ public enum OuraDecoders {
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\u{0000}"))
         }
         return OuraState(ringTimestamp: rec.ringTimestamp, stateCode: Int(code), text: text)
+    }
+
+    // MARK: - Feature-status read reply (0x2F sub-op 0x21; s5.6 / s7.1)
+
+    /// Decode a feature-status read reply's SUB-BODY (the bytes AFTER the `0x21` sub-op) into
+    /// `feature, mode, status, state, subscription`, the ring's own feature report [open_oura-feat]. The
+    /// observed daytime-HR reply is `2f 06 21 02 01 11 02 00` → sub-body `02 01 11 02 00`. Returns nil on a
+    /// short body (< 5) so a truncated reply never fabricates a status. READ-ONLY diagnostic.
+    public static func decodeFeatureStatus(_ subBody: [UInt8]) -> OuraFeatureStatus? {
+        guard subBody.count >= 5 else { return nil }
+        return OuraFeatureStatus(feature: Int(subBody[0]), mode: Int(subBody[1]),
+                                 status: Int(subBody[2]), state: Int(subBody[3]),
+                                 subscription: Int(subBody[4]))
     }
 
     // MARK: - Debug text (0x43; s6.15)
