@@ -18,6 +18,15 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "9.1.1",
+          "buildVersion": "208",
+          "date": "2026-07-25",
+          "localizedDescription": "NOOP 9.1.1. See the release notes for what changed.",
+          "downloadURL": "https://github.com/kavemang/noop/releases/download/v9.1.1/NOOP-ios-unsigned-v9.1.1.ipa",
+          "size": 24177589,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "9.1.0",
           "buildVersion": "207",
           "date": "2026-07-25",
@@ -1306,12 +1315,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "9.1.0",
-      "buildVersion": "207",
+      "version": "9.1.1",
+      "buildVersion": "208",
       "versionDate": "2026-07-25",
-      "versionDescription": "NOOP 9.1.0. See the release notes for what changed.",
-      "downloadURL": "https://github.com/kavemang/noop/releases/download/v9.1.0/NOOP-ios-unsigned-v9.1.0.ipa",
-      "size": 24155225,
+      "versionDescription": "NOOP 9.1.1. See the release notes for what changed.",
+      "downloadURL": "https://github.com/kavemang/noop/releases/download/v9.1.1/NOOP-ios-unsigned-v9.1.1.ipa",
+      "size": 24177589,
       "minOSVersion": "17.0"
     }
   ],
