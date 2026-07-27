@@ -290,12 +290,39 @@ interface WhoopDao : DeviceRegistryDao {
         List<PpgWaveformSampleEntity>
 
     /** Aggregate HR over a window (one indexed (deviceId,ts) range scan — no row materialisation,
-     *  no [hrSamples] LIMIT truncation). Backs the imported-workout HR fallback (#77). */
+     *  no [hrSamples] LIMIT truncation). Backs the imported-workout HR fallback (#77).
+     *
+     *  #836: aggregates the SAME measured-∪-PPG rows [hrSamples] returns, not `hrSample` alone. It used
+     *  to read only measured rows, so on a WHOOP 5 — where the firmware banks v26 PPG instead of v18 HR
+     *  per second — a PPG-heavy workout charted a full trace (the chart uses [hrSamples]) while this
+     *  counted under `fillWorkoutHrFromStrap`'s 60-sample floor, and Avg HR rendered blank. iOS never had
+     *  it: its twin reduces `store.hrSamples`, the coalescing read. Same anti-join as [hrSamples], so a
+     *  measured second is never double-counted by its PPG estimate. */
     @Query(
-        "SELECT COUNT(*) AS n, AVG(bpm) AS avg, MAX(bpm) AS max FROM hrSample " +
-            "WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to"
+        // #856: up to TWO ids, :primaryId winning per second. A naive `deviceId IN (…)` would count a
+        // second banked under BOTH ids twice after a strap re-add, inflating n and skewing avg — and
+        // both numbers would stay plausible, so nothing would look wrong. GROUP BY ts with MIN(pri)
+        // keeps one row per second and takes the primary's, matching the dedup the chart already does.
+        // Passing the same id for both is byte-identical to the old single-id read.
+        "SELECT COUNT(*) AS n, AVG(bpm) AS avg, MAX(bpm) AS max FROM (" +
+            "SELECT ts, MIN(pri), bpm FROM (" +
+            "SELECT ts, bpm, 0 AS pri FROM hrSample " +
+            "WHERE deviceId = :primaryId AND ts >= :from AND ts <= :to " +
+            "UNION ALL " +
+            "SELECT p.ts AS ts, p.bpm AS bpm, 0 AS pri FROM ppgHrSample p " +
+            "WHERE p.deviceId = :primaryId AND p.ts >= :from AND p.ts <= :to " +
+            "AND NOT EXISTS (SELECT 1 FROM hrSample h WHERE h.deviceId = p.deviceId AND h.ts = p.ts) " +
+            "UNION ALL " +
+            "SELECT ts, bpm, 1 AS pri FROM hrSample " +
+            "WHERE deviceId = :secondaryId AND ts >= :from AND ts <= :to " +
+            "UNION ALL " +
+            "SELECT p.ts AS ts, p.bpm AS bpm, 1 AS pri FROM ppgHrSample p " +
+            "WHERE p.deviceId = :secondaryId AND p.ts >= :from AND p.ts <= :to " +
+            "AND NOT EXISTS (SELECT 1 FROM hrSample h WHERE h.deviceId = p.deviceId AND h.ts = p.ts) " +
+            ") GROUP BY ts" +
+            ")"
     )
-    suspend fun hrWindowStats(deviceId: String, from: Long, to: Long): HrWindowStats
+    suspend fun hrWindowStats(primaryId: String, secondaryId: String, from: Long, to: Long): HrWindowStats
 
     @Query(
         // #823: `ord` FIRST, so same-second beats come back in EMISSION order. Ordering by rrMs made
