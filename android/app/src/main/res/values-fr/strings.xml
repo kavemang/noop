@@ -1541,6 +1541,16 @@
     <string name="action_log_journal">Enregistrer le journal</string>
     <string name="action_breathe">Respirer</string>
     <string name="today_latest_workouts">Derniers entraînements</string>
+    <string name="today_customize_title">Personnaliser Aujourd’hui</string>
+    <string name="today_customize_action">Personnaliser</string>
+    <string name="today_customize_description">Réorganisez les éléments affichés ou déplacez une section dans Masqués sans la supprimer.</string>
+    <string name="today_customize_shown">AFFICHÉS</string>
+    <string name="today_customize_hidden">MASQUÉS</string>
+    <string name="today_customize_nothing_hidden">Aucun élément masqué</string>
+    <string name="today_customize_move_up">Déplacer %1$s vers le haut</string>
+    <string name="today_customize_move_down">Déplacer %1$s vers le bas</string>
+    <string name="today_customize_hide">Masquer %1$s</string>
+    <string name="today_customize_show">Afficher %1$s</string>
     <string name="terms_title">Avant d\'utiliser NOOP</string>
     <string name="terms_subtitle">Veuillez lire les points ci-dessous, puis confirmer chaque déclaration.</string>
     <string name="terms_point_independent_head">Indépendant : non affilié à WHOOP</string>
@@ -1757,4 +1767,6 @@
     <string name="battery_channel_name">Alertes de batterie</string>
     <string name="battery_channel_desc">Alertes lorsque la batterie du bracelet est faible ou complètement chargée.</string>
     <string name="l10n_app_changelog_battery_saver_quiets_the_gauges_translated_bdbe8650">L\'économiseur de batterie fige les jauges, notifications Android traduites et graphiques instantanés</string>
+    <string name="l10n_health_screen_no_spo_import_or_health_value_408f8c55">Aucune importation SpO₂ ni valeur Santé</string>
+    <string name="l10n_health_screen_raw_counts_only_needs_an_import_d0e33552">Valeurs brutes uniquement — importation requise</string>
 </resources>
