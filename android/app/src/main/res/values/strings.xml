@@ -338,6 +338,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">e.g. gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Enter any model id the provider accepts.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Fetch models from provider</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">Key header</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Let the coach use my data</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Model: %1$s. Tap to change.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -347,6 +348,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">Server URL</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Suggested prompt: %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">Thinking…</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Use Bearer for most local servers; use x-api-key for gateways that require the key in that header.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Use model</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Add a metric to compare</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Compare</string>
@@ -1883,4 +1885,25 @@
     <string name="onboarding_theme_follow_system">Following your phone\'s light/dark setting.</string>
     <string name="onboarding_theme_light_description">Deep blue accent on warm paper.</string>
     <string name="onboarding_theme_dark_description">Deep blue accent on a dark blue-grey canvas.</string>
+    <string name="recording_chip_title_recording">Recording</string>
+    <string name="recording_chip_title_last_synced">Last synced %1$dm ago</string>
+    <string name="recording_chip_title_not_recording">Not recording</string>
+    <string name="recording_chip_title_connected">Connected</string>
+    <string name="recording_chip_detail_recording">Your strap is connected and saving data.</string>
+    <string name="recording_chip_detail_last_synced">Reconnect to pull the latest.</string>
+    <string name="recording_chip_detail_not_recording">Strap not connected. Tap to connect.</string>
+    <string name="recording_chip_detail_history_experimental">History sync is experimental on 5.0.</string>
+    <string name="recording_chip_detail_connected_no_data">No live heart rate or synced history yet this session.</string>
+    <string name="score_state_title_calibrating">Calibrating</string>
+    <string name="score_state_title_needs_strap">Needs the strap</string>
+    <string name="score_state_title_last_night">Last night · %1$s</string>
+    <string name="score_state_title_latest_sleep">Latest sleep · %1$s</string>
+    <string name="score_state_detail_needs_strap">No data for today. Was your strap worn and connected overnight?</string>
+    <string name="score_state_detail_carried_fresh">Tonight\'s lands after you sleep with the strap on.</string>
+    <string name="score_state_detail_carried_stale">This is your last scored session. Wear the strap overnight for a fresh score.</string>
+    <plurals name="score_state_detail_calibrating">
+        <item quantity="one">Building your baseline. About %1$d more night until your scores are personal.</item>
+        <item quantity="other">Building your baseline. About %1$d more nights until your scores are personal.</item>
+    </plurals>
+    <string name="l10n_app_changelog_widgets_stop_inventing_numbers_naps_count_4f7491bb">Widgets stop inventing numbers, naps count toward sleep debt, and the Android status chips speak your language</string>
 </resources>

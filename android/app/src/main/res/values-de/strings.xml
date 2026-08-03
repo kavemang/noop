@@ -329,6 +329,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">z. B. gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Geben Sie eine Modell-ID ein, die der Anbieter akzeptiert.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Modelle von Anbietern abrufen</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">Schlüssel-Header</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Dem Coach erlauben, meine Daten zu nutzen</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Modell: %1$s. Tap zum Ändern.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -338,6 +339,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">Server-URL</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Vorgeschlagene Aufforderung: %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">Denken...</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Verwende Bearer für die meisten lokalen Server; verwende x-api-key für Gateways, die den Schlüssel in diesem Header verlangen.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Verwendungsmodell</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Eine Metrik zum Vergleich hinzufügen</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Vergleichen</string>
@@ -1872,4 +1874,25 @@
     <string name="onboarding_theme_follow_system">Die Hell-/Dunkel-Einstellung deines Smartphones wird übernommen.</string>
     <string name="onboarding_theme_light_description">Tiefblaue Akzente auf einem warmen, hellen Hintergrund.</string>
     <string name="onboarding_theme_dark_description">Tiefblaue Akzente auf einem dunklen, blaugrauen Hintergrund.</string>
+    <string name="recording_chip_title_recording">Aufnahme</string>
+    <string name="recording_chip_title_last_synced">Zuletzt vor %1$d Min. synchronisiert</string>
+    <string name="recording_chip_title_not_recording">Keine Aufzeichnung</string>
+    <string name="recording_chip_title_connected">Verbunden</string>
+    <string name="recording_chip_detail_recording">Dein Strap ist verbunden und speichert Daten.</string>
+    <string name="recording_chip_detail_last_synced">Verbinde neu, um das Neueste zu laden.</string>
+    <string name="recording_chip_detail_not_recording">Strap nicht verbunden. Tippe zum Verbinden.</string>
+    <string name="recording_chip_detail_history_experimental">Verlaufssynchronisierung ist auf 5.0 experimentell.</string>
+    <string name="recording_chip_detail_connected_no_data">Noch keine Live-Herzfrequenz und kein synchronisierter Verlauf in dieser Sitzung.</string>
+    <string name="score_state_title_calibrating">Kalibrierung</string>
+    <string name="score_state_title_needs_strap">Strap erforderlich</string>
+    <string name="score_state_title_last_night">Letzte Nacht · %1$s</string>
+    <string name="score_state_title_latest_sleep">Letzter Schlaf · %1$s</string>
+    <string name="score_state_detail_needs_strap">Keine Daten für heute. War dein Strap über Nacht getragen und verbunden?</string>
+    <string name="score_state_detail_carried_fresh">Der Wert für heute Nacht kommt, nachdem du mit dem Strap geschlafen hast.</string>
+    <string name="score_state_detail_carried_stale">Das ist deine letzte bewertete Sitzung. Trage den Strap über Nacht für einen frischen Wert.</string>
+    <plurals name="score_state_detail_calibrating">
+        <item quantity="one">Deine Basislinie wird aufgebaut. Noch etwa %1$d Nacht, bis deine Werte persönlich sind.</item>
+        <item quantity="other">Deine Basislinie wird aufgebaut. Noch etwa %1$d Nächte, bis deine Werte persönlich sind.</item>
+    </plurals>
+    <string name="l10n_app_changelog_widgets_stop_inventing_numbers_naps_count_4f7491bb">Widgets erfinden keine Zahlen mehr, Nickerchen zählen für die Schlafschuld, und die Android-Statusanzeigen sprechen deine Sprache</string>
 </resources>

@@ -159,6 +159,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">Par exemple gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Entrez n\'importe quel modèle id que le fournisseur accepte.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Obtenez des modèles du fournisseur</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">En-tête de clé</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Laisser le coach utiliser mes données</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Modèle : %1$s. Appuyez sur pour changer.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -168,6 +169,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">URL du serveur</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Indicatif suggéré : %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">Penser...</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Utilisez Bearer pour la plupart des serveurs locaux ; utilisez x-api-key pour les passerelles qui exigent la clé dans cet en-tête.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Utiliser le modèle</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Ajouter une métrique à comparer</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Comparer</string>
@@ -1857,4 +1859,25 @@
     <string name="onboarding_theme_follow_system">Le réglage clair ou sombre de votre téléphone est utilisé.</string>
     <string name="onboarding_theme_light_description">Des accents bleu profond sur un fond clair et chaleureux.</string>
     <string name="onboarding_theme_dark_description">Des accents bleu profond sur un fond bleu-gris sombre.</string>
+    <string name="recording_chip_title_recording">Enregistrement</string>
+    <string name="recording_chip_title_last_synced">Synchronisé il y a %1$d min</string>
+    <string name="recording_chip_title_not_recording">Pas d\'enregistrement</string>
+    <string name="recording_chip_title_connected">Connecté</string>
+    <string name="recording_chip_detail_recording">Votre bracelet est connecté et enregistre les données.</string>
+    <string name="recording_chip_detail_last_synced">Reconnectez-vous pour récupérer les dernières données.</string>
+    <string name="recording_chip_detail_not_recording">Bracelet non connecté. Touchez pour vous connecter.</string>
+    <string name="recording_chip_detail_history_experimental">La synchronisation de l\'historique est expérimentale sur 5.0.</string>
+    <string name="recording_chip_detail_connected_no_data">Aucune fréquence cardiaque en direct ni historique synchronisé durant cette session.</string>
+    <string name="score_state_title_calibrating">Calibration en cours</string>
+    <string name="score_state_title_needs_strap">Nécessite le bracelet</string>
+    <string name="score_state_title_last_night">La nuit dernière · %1$s</string>
+    <string name="score_state_title_latest_sleep">Dernier sommeil · %1$s</string>
+    <string name="score_state_detail_needs_strap">Pas de données pour aujourd\'hui. Votre bracelet était-il porté et connecté pendant la nuit ?</string>
+    <string name="score_state_detail_carried_fresh">Celui de ce soir arrive après avoir dormi avec le bracelet.</string>
+    <string name="score_state_detail_carried_stale">Voici votre dernière séance notée. Portez le bracelet pendant la nuit pour obtenir un nouveau score.</string>
+    <plurals name="score_state_detail_calibrating">
+        <item quantity="one">Construction de votre référence. Encore environ %1$d nuit avant que vos scores soient personnels.</item>
+        <item quantity="other">Construction de votre référence. Encore environ %1$d nuits avant que vos scores soient personnels.</item>
+    </plurals>
+    <string name="l10n_app_changelog_widgets_stop_inventing_numbers_naps_count_4f7491bb">Les widgets n\'inventent plus de chiffres, les siestes comptent pour la dette de sommeil, et les indicateurs Android parlent votre langue</string>
 </resources>

@@ -312,6 +312,7 @@
     <string name="l10n_coach_screen_e_g_gpt_4o_1da2e4d2">por exemplo gpt-4o</string>
     <string name="l10n_coach_screen_enter_any_model_id_the_provider_dce4bbcb">Introduza qualquer ID de modelo que o fornecedor aceite.</string>
     <string name="l10n_coach_screen_fetch_models_from_provider_6654e1a0">Procurar modelos do provedor</string>
+    <string name="l10n_coach_screen_key_header_3f2a9b10">Cabeçalho da chave</string>
     <string name="l10n_coach_screen_let_the_coach_use_my_data_405d1188">Deixe o treinador usar os meus dados</string>
     <string name="l10n_coach_screen_model_selected_tap_to_change_043056c1">Modelo: %1$s. Toque em para alterar.</string>
     <string name="l10n_coach_screen_provider_displayname_model_8b39f761">%1$s · %2$s</string>
@@ -321,6 +322,7 @@
     <string name="l10n_coach_screen_server_url_1d5d1eff">URL do servidor</string>
     <string name="l10n_coach_screen_suggested_prompt_prompt_379c0b15">Prompt sugerido: %1$s</string>
     <string name="l10n_coach_screen_thinking_a60d9c9c">A pensar…</string>
+    <string name="l10n_coach_screen_use_bearer_for_most_local_servers_4429ab64">Usa Bearer para a maioria dos servidores locais; usa x-api-key para gateways que exigem a chave nesse cabeçalho.</string>
     <string name="l10n_coach_screen_use_model_8d558ce2">Usar modelo</string>
     <string name="l10n_compare_screen_add_a_metric_to_compare_e6a7c9f1">Adicione uma métrica para comparar</string>
     <string name="l10n_compare_screen_compare_8d105cf4">Comparar</string>
@@ -1851,4 +1853,25 @@
     <string name="onboarding_theme_follow_system">É utilizada a definição de tema claro ou escuro do teu telemóvel.</string>
     <string name="onboarding_theme_light_description">Destaques em azul-escuro sobre um fundo claro e acolhedor.</string>
     <string name="onboarding_theme_dark_description">Destaques em azul-escuro sobre um fundo azul-acinzentado escuro.</string>
+    <string name="recording_chip_title_recording">Gravação</string>
+    <string name="recording_chip_title_last_synced">Última sincronização há %1$dm</string>
+    <string name="recording_chip_title_not_recording">Não está a gravar</string>
+    <string name="recording_chip_title_connected">Ligado</string>
+    <string name="recording_chip_detail_recording">A tua bracelete está conectada e a guardar dados.</string>
+    <string name="recording_chip_detail_last_synced">Volte a ligar para obter o mais recente.</string>
+    <string name="recording_chip_detail_not_recording">Correia não ligada. Toque para ligar.</string>
+    <string name="recording_chip_detail_history_experimental">A sincronização do histórico é experimental na versão 5.0.</string>
+    <string name="recording_chip_detail_connected_no_data">Ainda não há frequência cardíaca em direto nem histórico sincronizado nesta sessão.</string>
+    <string name="score_state_title_calibrating">A calibrar</string>
+    <string name="score_state_title_needs_strap">Precisa da pega</string>
+    <string name="score_state_title_last_night">Ontem à noite · %1$s</string>
+    <string name="score_state_title_latest_sleep">Último sono · %1$s</string>
+    <string name="score_state_detail_needs_strap">Não há dados para hoje. A tua bracelete foi usada e ligada durante a noite?</string>
+    <string name="score_state_detail_carried_fresh">A noite de hoje chega depois de ter dormido com a pega.</string>
+    <string name="score_state_detail_carried_stale">Esta é a tua última sessão pontuada. Usa a bracelete durante a noite para obteres uma nova pontuação.</string>
+    <plurals name="score_state_detail_calibrating">
+        <item quantity="one">A construir a tua linha de base. Cerca de mais %1$d noite até que a tua pontuação seja pessoal.</item>
+        <item quantity="other">A construir a tua linha de base. Cerca de %1$d mais noites até que a tua pontuação seja pessoal.</item>
+    </plurals>
+    <string name="l10n_app_changelog_widgets_stop_inventing_numbers_naps_count_4f7491bb">Os widgets deixam de inventar números, as sestas contam para a dívida de sono, e os indicadores Android falam a tua língua</string>
 </resources>
