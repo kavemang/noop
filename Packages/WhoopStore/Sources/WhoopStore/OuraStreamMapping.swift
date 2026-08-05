@@ -65,7 +65,14 @@ public enum OuraStreamMapping {
                 out.hr.append(HRSample(ts: ts, bpm: v.bpm))
 
             case .ibi(let v):
-                out.rr.append(RRInterval(ts: ts, rrMs: v.ibiMs))
+                // Carry the decoder's OWN channel tag onto the durable row (#1071). The ring reports the
+                // same heartbeats on more than one tag — 0x80 green-quality all night, 0x6E only while an
+                // SpO2 measurement runs — and both decode to `.ibi`, so an untagged store held roughly TWO
+                // complete copies of every night (measured 2.06x beats and 2.17x sum(rrMs)/wall-clock over
+                // one 488-min window). Both rows are real measurements, so neither is dropped here; the
+                // scoring READ (`Reads.rrIntervals`) picks one channel and the other stays on disk as its
+                // cross-check. Nil stays nil — a channel is never guessed.
+                out.rr.append(RRInterval(ts: ts, rrMs: v.ibiMs, srcChannel: rrChannel(v.channel)))
 
             case .hrv(let v):
                 // The ring's own 0x5D tag, carried RAW for diagnostics/parity. The two int8 fields
@@ -86,7 +93,31 @@ public enum OuraStreamMapping {
                 // Oura reports a single SpO2 channel; `SpO2Sample` is the WHOOP-shaped two-channel raw row,
                 // so we record the decoded value on `red` and leave `ir` at 0 (no second channel). `unit`
                 // carries the decoder's own scale tag ("raw"/"dc_raw") so downstream never assumes a %.
-                out.spo2.append(SpO2Sample(ts: ts, red: v.value, ir: 0, unit: v.unit))
+                //
+                // Each sample gets its OWN second. `spo2Sample` is keyed (deviceId, ts), so the 13 samples
+                // of one 0x6F record written at the record's single `ts` collided and only the first
+                // survived — 92% of an overnight silently discarded, and unrecoverable because the ring
+                // trims its banked history once the offload is acked (#1070). The samples are one per
+                // second (measured: 13 values per packet at a 13 s median packet interval, p10 12 / p90 14,
+                // so they tile the interval at exactly 1 Hz), and they are laid BACKWARD from the record
+                // time — the record envelope marks the WRITE moment, so the LAST sample keeps the record's
+                // own `ts` and the anchor semantics are unchanged. Same derivation standard the
+                // hypnogram assembler is held to (see `.sleepPhase` below, which lays a burst's codes
+                // backward at the documented 30 s epoch from its anchored end, precisely so every code
+                // is a distinct row): a documented cadence plus a record anchor, never a guessed one.
+                // `count == 1` (0x7B, and any single-sample record) yields offset 0, i.e. exactly the
+                // previous behaviour. PARITY: the Kotlin twin computes the IDENTICAL second.
+                //
+                // This is collision-RARE, not collision-proof. The cadence has a tight tail (p10 12 s),
+                // and a 12 s gap between two 13-sample records makes the newer record's FIRST second
+                // equal the older record's last, costing one sample at that boundary. Measured over the
+                // same overnight: 204 of 1,877 adjacent pairs overlap, by exactly 1 s each, so 204 of
+                // 24,405 samples (0.84 %) are lost — against 92.3 % before. `spo2Sample` inserts
+                // `ON CONFLICT DO NOTHING`, so the survivor is the older record's last sample, which is
+                // the anchor-exact one; what is dropped is the newer record's most back-extrapolated
+                // sample. Sub-second timestamps would be needed to keep both, and the row key is seconds.
+                let sampleTs = ts - max(0, v.count - 1 - v.index)
+                out.spo2.append(SpO2Sample(ts: sampleTs, red: v.value, ir: 0, unit: v.unit))
 
             case .temp(let v):
                 // The decoder yields degrees C. The durable `SkinTempSample.raw` is an integer in the
@@ -142,5 +173,20 @@ public enum OuraStreamMapping {
             }
         }
         return out
+    }
+
+    /// Translate the protocol layer's `OuraIBIChannel` to the store's `RRSourceChannel` (#1071).
+    ///
+    /// Two enums rather than one because `OuraProtocol` deliberately does not depend on `WhoopProtocol`
+    /// (it is the pure, Linux-buildable ring decoder). They pin the SAME raw values, and the mapping is
+    /// written out case by case rather than as `RRSourceChannel(rawValue:)` so that adding a case on one
+    /// side without the other is a COMPILE error instead of a silent nil. Exposed for the parity test.
+    public static func rrChannel(_ c: OuraIBIChannel?) -> RRSourceChannel? {
+        switch c {
+        case .greenQuality:  return .greenQuality
+        case .spo2Ibi:       return .spo2Ibi
+        case .ibiAmplitude:  return .ibiAmplitude
+        case nil:            return nil
+        }
     }
 }
