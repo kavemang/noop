@@ -579,6 +579,7 @@ fun SettingsScreen(
     // Trend charts (Line / Bar) — flips the Trends tab between the gradient line and value-ramp bars.
     // Display-only; SharedPreferences isn't reactive, so mirror into local state and persist on select.
     var trendChartStyle by remember { mutableStateOf(UnitPrefs.trendChartStyle(context)) }
+    var sleepChartStyle by remember { mutableStateOf(UnitPrefs.sleepChartStyle(context)) }
     // HRV window (#141) — whole-night vs deep-sleep (WHOOP-style). NOT display-only: it changes the computed
     // avgHrv, so a switch clears the analyze watermark to force a re-score + re-baseline on the next pass.
     var hrvWindow by remember { mutableStateOf(UnitPrefs.hrvWindow(context)) }
@@ -1076,6 +1077,31 @@ fun SettingsScreen(
                         trendChartStyle = style
                         UnitPrefs.setTrendChartStyle(context, style)
                     },
+                )
+            }
+            SettingsRowDivider()
+            // Sleep chart style (#sleep-chart-style). Display-only: "Classic" keeps the per-stage-rows
+            // timeline; "Filled" swaps the Sleep tab's stage chart for a single stepped hypnogram with the
+            // stages stacked by depth and each column filled to the baseline. Same data either way; this only
+            // changes the drawing, and it falls back to Classic on a night with no timestamped segments.
+            SettingsFormRow(label = "Sleep chart") {
+                SegmentedPillControl(
+                    items = listOf(SleepChartStyle.CLASSIC, SleepChartStyle.FILLED, SleepChartStyle.RIBBON),
+                    selection = sleepChartStyle,
+                    label = {
+                        when (it) {
+                            SleepChartStyle.FILLED -> "Filled"
+                            SleepChartStyle.RIBBON -> "Ribbon"
+                            else -> "Classic"
+                        }
+                    },
+                    onSelect = { style ->
+                        sleepChartStyle = style
+                        UnitPrefs.setSleepChartStyle(context, style)
+                    },
+                    // Three segments — share the row width equally so the labels can't widen the card past
+                    // the screen (the component's own guidance for longer option sets).
+                    adaptsToAvailableWidth = true,
                 )
             }
 
