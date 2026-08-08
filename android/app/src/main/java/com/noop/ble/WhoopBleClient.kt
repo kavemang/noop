@@ -639,6 +639,13 @@ class WhoopBleClient(
             thresholdPct: Int,
         ): Long = if (idleThrottleActive(batteryPct, charging, thresholdPct)) maxOf(baseMs, lowBatteryMs) else baseMs
 
+        /** #battery: pure periodic-offload interval for a 5/MG whose history is known-empty, unit-testable
+         *  without a BLE stack. Stretches to the low-battery floor (45 min) regardless of battery %, because
+         *  an experimental-history 5/MG banks nothing per pass. Stacks with the BackfillPolicy empty-backoff
+         *  (which engages one cycle later, at 3 empties). Twin of iOS `BLEManager.whoop5EmptyHistoryBackfillInterval`. */
+        fun whoop5EmptyHistoryBackfillIntervalMs(baseMs: Long, lowBatteryMs: Long, historyEmpty: Boolean): Long =
+            if (historyEmpty) maxOf(baseMs, lowBatteryMs) else baseMs
+
         /** Pure keep/teardown decision for [prepareForPresentScan] (#74), unit-testable without a BLE
          *  stack (the [scanModeForReconnectAttempts] idiom). Keep the live link ONLY when one exists AND
          *  the wizard is scanning the SAME model; Android [WhoopModel] has exactly two members (one per
@@ -1714,26 +1721,26 @@ class WhoopBleClient(
      *  at the stack default (BALANCED) exactly as before. Flip on ONLY after on-strap validation (see
      *  #477); a follow-up wires it to a persisted Settings toggle. [connectionPriorityEnabled] enables the
      *  SAFE half (HIGH during offload/live-HR). The RISKY half (LOW_POWER when idle) is BATTERY-ADAPTIVE:
-     *  it engages only when the phone is discharging AND at/below [idleThrottleBatteryPct] (0 = never), so
+     *  it engages only when the STRAP is discharging AND at/below [idleThrottleBatteryPct] (0 = never), so
      *  the drop-risk is confined to when the user actually wants power saving. Set on the main looper via
      *  [setConnectionPriorityManagement]. */
     @Volatile private var connectionPriorityEnabled: Boolean = false
-    /** Battery-% at/below which the LOW_POWER idle throttle engages while discharging; 0 = never (safe
-     *  half only).
+    /** Battery-% at/below which the LOW_POWER idle throttle engages while the STRAP is discharging;
+     *  0 = never (safe half only).
      *
-     *  NOT REACHABLE TODAY, and this doc used to claim a Settings picker that was never built. The only
-     *  caller passes a hard-coded 0 (`AppViewModel.applyPowerSaving`), so the idle throttle is dormant
-     *  for everyone regardless of any setting. #477's validation plan needs it enabled on a real strap,
-     *  which nobody can currently do — see #1005, where the idle link is the addressable share and there
-     *  is no lever to reach it. Wiring a control is a separate change; do not describe one until it
-     *  exists.
+     *  REACHABLE as of #1035, but still OFF by default. `AppViewModel.applyPowerSaving` now passes
+     *  `NoopPrefs.idleThrottleBatteryPct` here instead of a hard-coded 0, so #477's validation plan can
+     *  finally arm it on a real strap. There is deliberately still NO Settings row: the pref is set
+     *  out-of-band on a debug build and CLAMPED to 0 or 10..30 on read, because the two preconditions
+     *  below are invisible in a UI and LOW_POWER can drop a link. Default 0 keeps today's behaviour
+     *  byte-identical for anyone who has not set it.
      *
-     *  Note it would ALSO need [connectionPriorityEnabled], i.e. the Fast history sync toggle, since
-     *  [refreshConnectionPriority] early-returns without it. A control for this alone would do nothing.
+     *  Note it ALSO needs [connectionPriorityEnabled], i.e. the Fast history sync toggle, since
+     *  [refreshConnectionPriority] early-returns without it. Setting this pref alone does nothing.
      *
-     *  Contrast [lowBatteryOffloadPct] below, which IS wired: the Power saving master drives it. Both key
-     *  on the STRAP's battery — see [batteryPctAndCharging] — so neither is a lever a user can pull
-     *  because their PHONE is draining. That is the gap #1005 runs into. */
+     *  Contrast [lowBatteryOffloadPct] below, which the Power saving master drives. Both key on the
+     *  STRAP's battery — see [batteryPctAndCharging] — so neither is a lever a user can pull because their
+     *  PHONE is draining. That is the gap #1005 runs into (this change does not close it). */
     @Volatile private var idleThrottleBatteryPct: Int = 0
 
     /** #533: also escalate to HIGH for the LIVE-HR stream, not just the offload burst. DEFAULT OFF, and
@@ -1858,8 +1865,24 @@ class WhoopBleClient(
     }
 
     /** The delay before the next periodic offload — normally [BACKFILL_INTERVAL_MS], stretched when low on
-     *  battery (#477). Reads the battery snapshot at re-arm time. */
+     *  battery (#477). Reads the battery snapshot at re-arm time.
+     *  #battery: a 5/MG whose history offload is known-empty ([whoop5EmptyOffload.historyEmpty], crossed
+     *  after 2 consecutive empty offloads) is stretched to [LOW_BATTERY_BACKFILL_INTERVAL_MS] (45 min)
+     *  regardless of battery % — history sync is experimental on 5.0 and such a strap banks nothing per
+     *  pass, so a 15-min periodic kick just holds the link ~60 s for zero data. The BackfillPolicy
+     *  empty-backoff also stretches (after 3 empties), but this engages one cycle earlier (tracker
+     *  quietThreshold = 2) at a fixed 45-min floor that stacks with it. Twin of iOS
+     *  `BLEManager.nextBackfillInterval`. Resets with [whoop5EmptyOffload] on disconnect. */
     private fun nextBackfillDelayMs(): Long {
+        // #battery: known-empty-history 5/MG → stretch to the 45-min floor before any battery lever.
+        if (connectedFamily == DeviceFamily.WHOOP5) {
+            val stretched = whoop5EmptyHistoryBackfillIntervalMs(
+                baseMs = BACKFILL_INTERVAL_MS,
+                lowBatteryMs = LOW_BATTERY_BACKFILL_INTERVAL_MS,
+                historyEmpty = whoop5EmptyOffload.historyEmpty,
+            )
+            if (stretched != BACKFILL_INTERVAL_MS) return stretched
+        }
         if (lowBatteryOffloadPct <= 0) return BACKFILL_INTERVAL_MS   // dormant: no battery read, unchanged cadence
         val (batteryPct, charging) = batteryPctAndCharging()
         return offloadIntervalMsFor(

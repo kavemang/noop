@@ -1057,9 +1057,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // for the bounded offload burst (faster backlog drain). The RISKY idle→LOW_POWER half stays at 0
         // (still dormant, #478), and live-HR does not escalate (see WhoopBleClient.escalateForLiveHr) —
         // realtimeArmed covers the overnight capture window, which would otherwise hold HIGH for hours.
+        // #477/#1005: the RISKY idle->LOW_POWER half was hard-coded to 0 here, so it was dormant for
+        // everyone and its own validation plan could never run. Reads the pref now; still 0 by default,
+        // so this changes nothing for anyone who has not deliberately set it.
         ble.setConnectionPriorityManagement(
             enabled = NoopPrefs.fastHistorySync(appContext),
-            idleThrottleBatteryPct = 0,
+            idleThrottleBatteryPct = NoopPrefs.idleThrottleBatteryPct(appContext),
         )
         // #533: the second, orthogonal sync-speed lever — prefer LE 2M around the offload burst. Also
         // independent of the Power-saving master, and its own toggle so a field report can tell the two
@@ -1229,7 +1232,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _lastWorkout.value = null
         val startMs = System.currentTimeMillis()
         _activeWorkout.value = ActiveWorkout(startMs = startMs, sport = sport, gpsEnabled = gpsEnabled)
-        buzz(1)
+        buzz(1, HapticPrefs.WORKOUT)
         // Workouts & GPS test mode (Test Centre): one session-start line tagged .workouts. Zero-cost when off.
         emitWorkoutsTrace {
             com.noop.analytics.WorkoutsTrace.sessionLine(
@@ -1393,7 +1396,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 gpsPoints = if (w.gpsEnabled) track.size else null,
             )
         }
-        buzz(2)
+        buzz(2, HapticPrefs.WORKOUT)
         viewModelScope.launch {
             runCatching { repository.upsertWorkouts(listOf(row)) }
             // #528: persist the live 1 Hz workout HR into hrSample so it can export to Health Connect
@@ -2375,6 +2378,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Fire a haptic buzz on the strap (requires a bonded connection). Scheduled cues only; for a
      *  user-facing "buzz the strap now" action use [buzzStrapOnce] instead (#921). */
     fun buzz(loops: Int = 2) = ble.buzz(loops)
+
+    /** #haptics (#1115 offshoot): an IN-SESSION cue buzz, GATED by its per-event [HapticPrefs] toggle
+     *  (default-off / opt-in, migrated-on for existing installs). Each in-session cue site passes its
+     *  [gate] key (e.g. [HapticPrefs.BREATHING]) so the enable check lives in ONE place rather than at every
+     *  Compose call site — and can't be forgotten, since the param is required. The ungated [buzz] /
+     *  [buzzStrapOnce] remain for ambient cues (which carry their own existing gates) and explicit user
+     *  buzzes (the Live-screen button, settings test), which are deliberately NOT default-off. */
+    fun buzz(loops: Int, gate: String) {
+        if (HapticPrefs.enabled(appContext, gate)) ble.buzz(loops)
+    }
 
     /** One-shot user buzz (#921): the confirmed pattern + RUN_ALARM sequence, written acknowledged
      *  (RUN_ALARM only where the family gate allows it). Drives the Live-screen Buzz button. */
