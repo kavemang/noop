@@ -249,7 +249,8 @@ data class LiveState(
  * Lifecycle, mirroring the verified Swift flow:
  *   1. [connect]  — scan by the WHOOP4 custom-service UUID (BLEManager.connect → scanForPeripherals).
  *   2. onScanResult — stop scan, `connectGatt` (centralManager didDiscover → central.connect).
- *   3. onConnectionStateChange(CONNECTED) — `discoverServices` (didConnect → discoverServices).
+ *   3. onConnectionStateChange(CONNECTED) — request MTU, allow the GATT operation to settle, then
+ *      `discoverServices` (didConnect → discoverServices).
  *   4. onServicesDiscovered — for the custom service: capture the cmd-write char and fire THE BOND
  *      (one confirmed write of GET_BATTERY_LEVEL); subscribe to the three custom notify chars + the
  *      standard HR and battery chars (didDiscoverCharacteristicsFor).
@@ -713,9 +714,9 @@ class WhoopBleClient(
          *  is what the official app requests (and the common BLE max), letting a full type-47 record
          *  ride one packet. Benefits both families' offload. (PR #85, iHateSubscriptions) */
         private const val GATT_MTU = 247
-        /** Proceed to service discovery even if onMtuChanged never fires (some stacks ignore
-         *  requestMtu); keeps connect from stalling behind the MTU exchange. */
-        private const val MTU_FALLBACK_MS = 1_500L
+        /** Fixed delay between the MTU attempt and service discovery. onMtuChanged can come from the
+         *  connection itself or requestMtu, with no provenance bit, so it cannot safely end this wait. */
+        private const val MTU_DISCOVERY_SETTLE_MS = 1_500L
         /** BASE bonded-handshake watchdog window (#50): if no genuine bond lands within this of service
          *  discovery starting, bounce the link rather than sit forever in "finishing secure handshake"
          *  (OnePlus Nord 2 wedged the post-discovery bond/CCCD phase, which had no timeout). 7s comfortably
@@ -773,6 +774,17 @@ class WhoopBleClient(
             alreadyPausedForBondLoop: Boolean,
         ): Boolean = wasConnected && !didBond && !intentionalDisconnect && !staleDirectBond &&
             status != GATT_CONN_TERMINATE_LOCAL_HOST && !alreadyPausedForBondLoop
+
+        /** Pure guard for a delayed service-discovery kick. The operation belongs only to the exact
+         *  connection that scheduled it, and a temporarily-missing GATT wrapper must not consume the
+         *  once-only claim. Kept pure because local JVM tests cannot instantiate BluetoothGatt. */
+        internal fun serviceDiscoveryAttemptAllowed(
+            expectedGeneration: Int,
+            currentGeneration: Int,
+            isCurrentGatt: Boolean,
+            connected: Boolean,
+            hasGattOps: Boolean,
+        ): Boolean = expectedGeneration == currentGeneration && isCurrentGatt && connected && hasGattOps
 
         /** Consecutive bond refusals on the pinned strap before handing the pin off to a different,
          *  live-bonding strap (#52). 3 (not 1): a single "insufficient" can be a transient just-works
@@ -1368,6 +1380,21 @@ class WhoopBleClient(
          *  BackfillContinuation.defaultBehindGapSeconds (and StuckStrapDetector's behindGapSeconds). */
         const val AUTO_CONTINUE_BEHIND_GAP_SECONDS = 300L
 
+        /** #1151: rolling window over which detailed-capture frame timing is summarised into one line. */
+        const val FRAME_TIMING_SUMMARY_WINDOW_MS = 60_000L
+
+        /** One detailed-capture line summarising [counts] (frame typeName → count) over [windowSec] seconds,
+         *  types listed most-frequent first: `frameTiming 60s: 84 frame(s) [EVENT×40, COMMAND_RESPONSE×30,
+         *  METADATA×14]`. Empty counts → a `0 frame(s) []` line (harmless; the caller only flushes after real
+         *  frames). Pure/deterministic (ties broken by type name) so it's unit-testable. */
+        fun formatFrameTimingSummary(counts: Map<String, Int>, windowSec: Long): String {
+            val total = counts.values.sum()
+            val types = counts.entries
+                .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+                .joinToString(", ") { "${it.key}×${it.value}" }
+            return "frameTiming ${windowSec}s: $total frame(s) [$types]"
+        }
+
         /** #928: how far past the WALL CLOCK the strap-reported "newest" may sit before it is implausible.
          *  A strap clock set in the FUTURE makes [dataRangeNewestUnix] read ahead of every real frontier,
          *  so the "backlog remains" guard would report backlog forever and burn the whole auto-continue
@@ -1452,6 +1479,15 @@ class WhoopBleClient(
             if (!stillConnected) return false                          // 1
             if (consecutiveCount >= maxAutoContinues) return false      // 4 (cap)
             if (!lastTrimAdvanced) return false                        // 3 (don't spin on a frozen cursor)
+            // 3b (#1144): an EMPTY session (0 rows persisted) never auto-continues, whatever the reported
+            // frontier gap. When the strap advertises a `newest` AHEAD of our frontier but the offload for
+            // that range hands back chunkRows=0 (a PHANTOM gap — a timestamp it won't actually offload), 2a
+            // below would latch `true` forever: the frontier can't advance without rows, so `newest -
+            // frontier` stays > gap and it re-fires to the full cap in empty offloads (the storm observed on
+            // a real 4.0). `lastTrimAdvanced` (3) doesn't catch it — the trim u32 climbs on empty ENDs. Stop
+            // and let the 15-min floor retry; healthy backlog sessions persist real rows so this only bites
+            // the empty spin. (Makes 2b's row check the ONE authority for both cases.)
+            if (rowsPersistedThisSession <= 0) return false
             // #928: a strap clock set in the FUTURE makes "newest" read ahead of ANY real frontier, so 2a
             // would report backlog forever and drive up to the full cap in EMPTY offloads on every
             // connect. A newest more than [futureSkewSeconds] past [wallNowUnix] (the REAL wall clock,
@@ -2263,7 +2299,25 @@ class WhoopBleClient(
      *  read AND written exclusively inside the mode gate, so the live hot path is untouched when the mode is
      *  off. The Swift side instead reuses LiveState.lastFrameType (a production field the Live console readout
      *  maintains anyway); Android has no such field, so this mirrors the emit while staying zero-cost off. */
-    private var connLastFrameType: String? = null
+    // #1151 detailed-capture: frame timing is accumulated per-type over a rolling window and flushed as ONE
+    // summary line, instead of a line per frame-TYPE transition (which was ~a third of a real capture, so the
+    // noise crowded actionable offload/reconnect/re-score history out of the 8MB rolling buffer). Test-only
+    // state, touched only inside the CONNECTION-domain gate.
+    private val connFrameCounts = LinkedHashMap<String, Int>()
+    private var connFrameWindowStartMs = 0L
+
+    /** Flush the accumulated frame-timing counts as ONE summary line and reset the window. No-op when
+     *  nothing has accumulated (capture off, or already flushed). Called on the 60s boundary AND on
+     *  disconnect — the latter so the frames RIGHT BEFORE a drop are recorded rather than stranded in an
+     *  un-flushed window, and so the next connection's window can't span the (possibly hours-long) quiet
+     *  gap and report a misleading windowSec. */
+    private fun flushFrameTimingSummary() {
+        if (connFrameCounts.isEmpty()) return
+        val elapsedSec = ((System.currentTimeMillis() - connFrameWindowStartMs).coerceAtLeast(0L)) / 1000L
+        log(formatFrameTimingSummary(connFrameCounts, elapsedSec), com.noop.testcentre.TestDomain.CONNECTION)
+        connFrameCounts.clear()
+        connFrameWindowStartMs = 0L
+    }
     /** #580: tracks CONSECUTIVE empty 5/MG offloads so a 5/MG whose firmware serves no history (but streams
      *  live HR fine) reads as "history sync experimental on 5.0" instead of a sync error, and the 120s
      *  bounce loop backs off while live HR is flowing. Reset on connect / a banking offload. Twin of macOS. */
@@ -4163,11 +4217,11 @@ class WhoopBleClient(
      *  ViewModel can call it; a thin wrapper over the private [clearPairingHint]. */
     fun clearPairingHintForUserConnect() = clearPairingHint()
 
-    /** Bonded-handshake watchdog (#50): every other connect phase has a timeout (scan; MTU fallback;
+    /** Bonded-handshake watchdog (#50): every other connect phase has a timeout (scan; MTU settle delay;
      *  keep-alive) but the post-discovery bond/CCCD handshake had none — so a WHOOP 4.0 that wedges
      *  in "finishing secure handshake" (OnePlus Nord 2, #50) never bounced, and keep-alive recovery
      *  bails before [didBond]. This bonded-INDEPENDENT watchdog bounces the link if no genuine bond
-     *  lands within its window, mirroring the MTU fallback. #971: the window ESCALATES per consecutive
+     *  lands within its window, mirroring the MTU settle delay. #971: the window ESCALATES per consecutive
      *  bounce ([bondWatchdogBackoff]) so a slow-but-healthy bond gets more time, and after a capped number
      *  of bounces we stop bouncing (see [onBondWatchdog]). Armed when service discovery starts; cancelled
      *  on bond and in reset/teardown. */
@@ -4441,27 +4495,40 @@ class WhoopBleClient(
         }
     }
 
-    /** Guards the once-per-connect service-discovery kick. Discovery is deferred behind an MTU request
-     *  (and a fallback timeout), so this ensures it fires EXACTLY once whichever path wins. AtomicBoolean
-     *  (not @Volatile): on API 26/27 the GATT callbacks land on binder-pool threads, so onMtuChanged and
-     *  the fallback can race — compareAndSet makes the once-only claim atomic. (PR #85) */
+    /** Guards the once-per-connect service-discovery kick. AtomicBoolean (not @Volatile): callbacks can
+     *  land on binder-pool threads on API 26/27, so a stale timer and teardown can race. */
     private val serviceDiscoveryKicked = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Named so reset can cancel it; an anonymous delayed kick can otherwise act on a later GATT. */
+    @Volatile private var serviceDiscoveryRunnable: Runnable? = null
 
     /** Last MTU value reported by onMtuChanged and when (System.currentTimeMillis), to dedupe a
      *  spurious double callback. The OnePlus Nord 2 BT stack fires onMtuChanged TWICE in quick
-     *  succession with the SAME mtu/status (#50): the second one re-enters service discovery / corrupts
-     *  GATT state, so every subsequent CCCD descriptor write returns BUSY forever and the WHOOP 4.0 bond
-     *  never completes (stuck "finishing the secure handshake"). A same-value MTU re-callback is always
-     *  spurious on any device, so this dedup is safe to apply unconditionally — not OnePlus-gated. */
+     *  succession with the SAME mtu/status (#50). Before discovery was decoupled from this callback,
+     *  the duplicate could re-enter discovery and leave every later CCCD write BUSY. Keep the dedup for
+     *  stable telemetry and to avoid repeating any future callback-side work. */
     private var lastMtuValue = -1
     private var lastMtuAtMs = 0L
 
-    /** Start service discovery exactly once per connection, whichever path (onMtuChanged or the
-     *  fallback timeout) reaches here first. Idempotent via [serviceDiscoveryKicked]. */
+    /** #1066 follow-up: wall-clock of the `requestMtu` attempt, so `onMtuChanged` can log how long the MTU
+     *  actually took to settle. `MTU_DISCOVERY_SETTLE_MS` (1.5s) is a deliberately-conservative FIXED wait
+     *  (no provenance bit to end it early), added to EVERY connect's discovery; this measurement is what
+     *  lets that constant be tuned down later with capture DATA rather than a guess. Reset per connection. */
+    @Volatile private var mtuRequestedAtMs = 0L
+
+    /** Start service discovery exactly once for the captured connection. */
     @SuppressLint("MissingPermission")
-    private fun kickServiceDiscovery(g: BluetoothGatt, reason: String) {
+    private fun kickServiceDiscovery(g: BluetoothGatt, expectedGeneration: Int, reason: String) {
+        val ops = gattOps
+        if (!serviceDiscoveryAttemptAllowed(
+                expectedGeneration = expectedGeneration,
+                currentGeneration = connectGeneration,
+                isCurrentGatt = gatt === g,
+                connected = _state.value.connected,
+                hasGattOps = ops != null,
+            )
+        ) return
         if (!serviceDiscoveryKicked.compareAndSet(false, true)) return
-        val ops = gattOps ?: return
         log("Discovering services ($reason)")
         // Arm the bonded-independent handshake watchdog (#50): from here the post-discovery bond/CCCD
         // phase runs, and it's the one connect stage that previously had no timeout. If [didBond] is
@@ -4469,7 +4536,17 @@ class WhoopBleClient(
         // in reset/teardown. Once-per-connection because kickServiceDiscovery is idempotent.
         armBondWatchdog()
         // safeGatt: discovery on a dead binder (radio off, #314) tears down rather than crashing.
-        safeGatt("discoverServices") { ops.discoverServicesCompat() }
+        safeGatt("discoverServices") { ops!!.discoverServicesCompat() }
+    }
+
+    private fun scheduleServiceDiscovery(g: BluetoothGatt, expectedGeneration: Int, reason: String) {
+        serviceDiscoveryRunnable?.let { handler.removeCallbacks(it) }
+        val runnable = Runnable {
+            serviceDiscoveryRunnable = null
+            kickServiceDiscovery(g, expectedGeneration, reason)
+        }
+        serviceDiscoveryRunnable = runnable
+        handler.postDelayed(runnable, MTU_DISCOVERY_SETTLE_MS)
     }
 
     @SuppressLint("MissingPermission")
@@ -4605,19 +4682,27 @@ class WhoopBleClient(
                         gattOps?.let { safeGatt("readRemoteRssi") { it.readRemoteRssiCompat() } }
                     }, RSSI_READ_DELAY_MS)
                     // Request the larger MTU BEFORE discovery/subscribe so the offload isn't capped at
-                    // 20-byte notifications (the official app does this in its GATT init). Discovery is
-                    // gated on the result with a fallback timeout, so a stack that ignores requestMtu
-                    // can't stall the connect. (PR #85)
+                    // 20-byte notifications (the official app does this in its GATT init). Discovery
+                    // follows one fixed settle delay whether the request is accepted or rejected, so a
+                    // stack that ignores requestMtu cannot stall the connect. (PR #85)
                     val mtuOps = gattOps
+                    mtuRequestedAtMs = System.currentTimeMillis()   // #1066: measure the real settle time
                     val mtuOk = mtuOps != null &&
                         safeGatt("requestMtu") { mtuOps.requestMtuCompat(GATT_MTU) }
                     if (mtuOk) {
                         log("Connected — requesting MTU $GATT_MTU before discovery")
-                        handler.postDelayed({ kickServiceDiscovery(g, "mtu timeout") }, MTU_FALLBACK_MS)
                     } else if (gatt != null) {
-                        // requestMtu returned false (stack ignored it) but the link is still alive —
-                        // discover directly. If safeGatt tore down (dead binder), gatt is null: skip.
-                        kickServiceDiscovery(g, "requestMtu rejected")
+                        // False can mean an automatic connection-event MTU is still busy. Do not start
+                        // discovery immediately; use the same fixed settle delay as the accepted path.
+                        log("Connected — MTU request rejected; settling before discovery")
+                    }
+                    // Android documents onMtuChanged as both a request result AND a connection event.
+                    // There is no provenance bit, so neither the first callback nor a later duplicate
+                    // proves our request is the operation that completed. Always wait one bounded delay,
+                    // then discover once against this exact GATT/generation. If safeGatt tore
+                    // the link down above, gatt is null and there is nothing to schedule.
+                    if (gatt === g) {
+                        scheduleServiceDiscovery(g, connectGeneration, "MTU settle timeout")
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
@@ -4629,22 +4714,29 @@ class WhoopBleClient(
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             // Dedupe the OnePlus double-MTU GATT bug (#50): the OnePlus Nord 2 stack fires onMtuChanged
-            // TWICE in quick succession with the SAME mtu/status. The second, spurious callback re-enters
-            // service discovery / corrupts GATT state, so every subsequent CCCD descriptor write returns
-            // BUSY forever and the WHOOP 4.0 bond never completes ("finishing the secure handshake"). A
-            // same-value MTU re-callback within the window is always spurious, so this is safe on every
-            // device (not OnePlus-gated).
+            // TWICE in quick succession with the SAME mtu/status. Discovery no longer starts from this
+            // callback, but duplicate telemetry is still noise and should not repeat future callback work.
             val now = System.currentTimeMillis()
             if (now - lastMtuAtMs < DUPLICATE_MTU_WINDOW_MS && mtu == lastMtuValue) {
-                log("Ignoring duplicate MTU callback (mtu=$mtu) — OnePlus/spurious")
+                // #1066 follow-up: still log THIS callback's timing before dropping it. A same-value second
+                // callback is often our requestMtu completing AFTER a fast connection-event MTU — dropping it
+                // silently would make the settle measurement under-report the real bound the 1.5s must cover.
+                val dupMs = if (mtuRequestedAtMs > 0L) now - mtuRequestedAtMs else -1L
+                log("Ignoring duplicate MTU callback (mtu=$mtu) — OnePlus/spurious" +
+                    if (dupMs >= 0L) " (${dupMs}ms after request)" else "")
                 return
             }
             lastMtuValue = mtu
             lastMtuAtMs = now
-            // Whatever the strap granted (≤ requested). Log it, then discover. kickServiceDiscovery is
-            // idempotent, so a late callback after the fallback timeout already fired is a no-op. (PR #85)
-            log("MTU negotiated: $mtu (status=$status)")
-            kickServiceDiscovery(g, "mtu=$mtu")
+            // Whatever the strap granted (≤ requested). Telemetry only: Android can emit this callback
+            // for the connection itself as well as requestMtu, without saying which. Starting discovery
+            // here can overlap the still-running MTU operation and wedge service discovery.
+            // #1066 follow-up: log the ACTUAL settle time vs the fixed MTU_DISCOVERY_SETTLE_MS wait, so a
+            // capture reveals how much headroom that 1.5s has before discovery. -1 when no request preceded
+            // this callback (a bare connection-event MTU).
+            val settledMs = if (mtuRequestedAtMs > 0L) now - mtuRequestedAtMs else -1L
+            log("MTU negotiated: $mtu (status=$status)" +
+                if (settledMs >= 0L) " — settled ${settledMs}ms after request (fixed wait ${MTU_DISCOVERY_SETTLE_MS}ms)" else "")
         }
 
         /** #533: what the controller and the strap ACTUALLY settled on — the request is only a preference
@@ -5219,19 +5311,17 @@ class WhoopBleClient(
         // Reject frames that failed their checksum — never let bad bytes drive state.
         if (parsed.crcOk == false) return
 
-        // Connection test mode: one tagged line per genuine frame-TYPE transition (not per frame - the raw
-        // flood repeats one type, so the transition guard naturally throttles it). Gated FIRST so this is
-        // genuinely zero-work on the live hot path when the mode is off: the type compare AND the
-        // connLastFrameType write both happen only inside the gate, so a frame on the non-test path touches
-        // no extra state at all. (connLastFrameType is test-only here; the macOS FrameRouter instead reuses
-        // its EXISTING lastFrameType field, which the Live console readout maintains anyway, so on macOS the
-        // per-change write is not extra work. Android has no such production field, hence the gate.)
+        // Connection test mode: accumulate frames by type and flush ONE `frameTiming` SUMMARY line per
+        // rolling window (#1151), instead of a line per frame-TYPE transition — during offloads/command
+        // bursts the type flips constantly, so the old per-transition log was ~a third of a real capture and
+        // aged actionable history out of the 8MB rolling buffer. Gated FIRST so a frame on the non-test path
+        // touches no extra state at all. (Android-only diagnostic; macOS uses FrameRouter's own lastFrameType
+        // for the Live console — a different surface, untouched here.)
         if (testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
-            if (parsed.typeName != connLastFrameType) {
-                log("frameTiming type=${parsed.typeName} t=${System.currentTimeMillis() / 1000L}s",
-                    com.noop.testcentre.TestDomain.CONNECTION)
-                connLastFrameType = parsed.typeName
-            }
+            val nowMs = System.currentTimeMillis()
+            if (connFrameWindowStartMs == 0L) connFrameWindowStartMs = nowMs
+            connFrameCounts[parsed.typeName] = (connFrameCounts[parsed.typeName] ?: 0) + 1
+            if (nowMs - connFrameWindowStartMs >= FRAME_TIMING_SUMMARY_WINDOW_MS) flushFrameTimingSummary()
         }
 
         when (parsed.typeName) {
@@ -7087,6 +7177,10 @@ class WhoopBleClient(
 
     @SuppressLint("MissingPermission")
     private fun handleDisconnect(status: Int) {
+        // #1151: flush any pending frame-timing window so the frames right before this drop are recorded
+        // (not stranded), and the next connection starts a fresh window rather than spanning the gap. No-op
+        // when capture is off. Do it BEFORE the connect-down line so the summary reads before the drop.
+        flushFrameTimingSummary()
         // Snapshot the hold time and clear it IMMEDIATELY: every drop log below reads the snapshot, and a
         // stale `linkUpSinceMs` surviving into the next drop would report a hold time for a link that never
         // reached STATE_CONNECTED — the diagnostic would then invent exactly the evidence it exists to find.
@@ -7361,10 +7455,13 @@ class WhoopBleClient(
         cccdInFlight = false
         cccdRetries = 0
         sessionStarted = false
+        serviceDiscoveryRunnable?.let { handler.removeCallbacks(it) }
+        serviceDiscoveryRunnable = null
         // Clear the onMtuChanged dedup (#50) so the first MTU callback of the NEXT connection — even to
         // the same strap with the same granted mtu — is never mistaken for a duplicate of the last one.
         lastMtuValue = -1
         lastMtuAtMs = 0L
+        mtuRequestedAtMs = 0L   // #1066: don't measure settle time across a connection boundary
         // The strap forgets the realtime-HR toggle across a disconnect; the post-bond branch re-arms it
         // from [wantsRealtime]. Clear only the "what we last sent" flag — the screen/preference WANTS
         // ([screenWantsRealtime]/[keepStreamForData]/[wantsRealtime]) are intent and must survive a
