@@ -525,6 +525,10 @@ public final class BLEManager: NSObject, ObservableObject {
     // The timer fires this often, but BackfillPolicy.periodicFloorSeconds is the real floor (a recent
     // event-triggered sync defers the next periodic tick). 900s = 15 min, matching WHOOP.
     static let backfillIntervalSeconds = 900
+    /// Scheduling flexibility for the long-running periodic offload timer. The offload remains no
+    /// earlier than its battery-adaptive deadline; this only lets Darwin coalesce the wake with nearby
+    /// system work instead of waking the CPU at an unnecessarily exact instant.
+    static let backfillTimerLeewaySeconds = 60
     /// #477: stretched offload cadence while low on power (45 min). The strap banks to flash meanwhile,
     /// so this only delays sync (larger batches), never loses data. Mirrors Android
     /// `LOW_BATTERY_BACKFILL_INTERVAL_MS`.
@@ -3425,6 +3429,11 @@ public final class BLEManager: NSObject, ObservableObject {
         keepAliveTimer?.cancel()
         let s = BLEManager.keepAliveIntervalSeconds
         let t = DispatchSource.makeTimerSource(queue: .main)
+        // Kept EXACT (no leeway): this tick isn't just a liveness check — `keepAliveFire` re-arms the
+        // WHOOP 4 realtime burst (R10/R11) and re-subscribes notifications every cycle so streaming can't
+        // lapse. Coalescing it up to a few seconds late risks a brief realtime-stream gap, for a battery
+        // gain that rounds to nothing on a 30 s timer. The real coalescing win is the offload timer's 60 s
+        // leeway (#1052), which is genuinely loose because the strap banks to flash between syncs.
         t.schedule(deadline: .now() + .seconds(s), repeating: .seconds(s))
         t.setEventHandler { [weak self] in self?.keepAliveFire() }
         t.resume()
@@ -3487,7 +3496,8 @@ public final class BLEManager: NSObject, ObservableObject {
         // each tick — so the cadence can stretch/relax as power state changes (was a fixed repeating timer).
         let interval = nextBackfillInterval()
         let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + .seconds(interval))
+        t.schedule(deadline: .now() + .seconds(interval),
+                   leeway: .seconds(BLEManager.backfillTimerLeewaySeconds))
         t.setEventHandler { [weak self] in self?.triggerPeriodicBackfill() }
         t.resume()
         backfillTimer = t

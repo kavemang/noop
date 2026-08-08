@@ -473,6 +473,18 @@
       "r = %+.2f"
     ],
     [
+      "android/app/src/main/java/com/noop/ui/NoopLimitationsScreen.kt",
+      "${row.feature}: WHOOP 4.0 ${row.whoop4.spoken}, 5.0/MG ${row.whoop5.spoken}"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/NoopLimitationsScreen.kt",
+      "5.0/MG"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/NoopLimitationsScreen.kt",
+      "Feature"
+    ],
+    [
       "android/app/src/main/java/com/noop/ui/NotificationsSettingsScreen.kt",
       "Buzzes your wrist"
     ],

@@ -3046,6 +3046,7 @@ fun SettingsScreen(
             }
         }
 
+
         // Steps-estimate calibration, opened from the Profile card's "Steps estimate" row. Same
         // full-screen Dialog idiom; a manual-coefficient write bumps `rev` so the Profile summary
         // row reflects the new state on dismiss.
