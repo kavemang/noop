@@ -1,8 +1,10 @@
 package com.noop.ui
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -68,6 +70,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -86,6 +91,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -582,6 +596,9 @@ fun SettingsScreen(
 
     // Theme (System / Light / Dark) — drives NoopTheme; AppearancePrefs mirrors it in snapshot state.
     var themeMode by remember { mutableStateOf(AppearancePrefs.mode) }
+    // App language owns the process resource locale; changing it recreates this Activity below so every
+    // composable and non-composable resource lookup switches together.
+    var appLanguage by remember { mutableStateOf(AppLanguagePrefs.selected(context)) }
     // Chart colours (Titanium / Classic) — re-colours gauges + charts; ChartStylePrefs mirrors it live.
     var chartStyle by remember { mutableStateOf(ChartStylePrefs.style) }
     // Chrome accent (Mint / WHOOP Blue / Custom) — chrome only; AccentPrefs mirrors it in snapshot state.
@@ -1051,13 +1068,68 @@ fun SettingsScreen(
         SettingsCard(
             icon = Icons.Filled.Brightness6,
             title = uiString(R.string.l10n_settings_screen_appearance_41def7a0),
-            blurb = "Choose Light, Dark, or follow your system. Dark is the signature near-black; Light keeps the same clean look on a bright canvas.",
+            blurb = uiString(R.string.settings_appearance_detail),
         ) {
+            // App-owned UI language. Recreates the Activity on change so every composable + non-composable
+            // resource lookup switches together. Sits above the theme controls because it re-words them all.
+            val languages = AppLanguage.entries
+            val languageLabels = languages.map {
+                if (it == AppLanguage.SYSTEM) uiString(R.string.settings_language_system)
+                else it.autonym
+            }
+            SettingsFormRow(label = uiString(R.string.settings_language)) {
+                WheelPickerField(
+                    value = languageLabels[languages.indexOf(appLanguage)],
+                    accessibility = uiString(R.string.settings_language),
+                    options = languageLabels,
+                    selectedIndex = languages.indexOf(appLanguage),
+                    dialogTitle = uiString(R.string.settings_choose_language),
+                    onSelected = { index ->
+                        val selected = languages[index]
+                        if (selected != appLanguage) {
+                            appLanguage = selected
+                            AppLanguagePrefs.set(context, selected)
+                            context.hostingActivity()?.recreate()
+                        }
+                    },
+                )
+            }
+            SettingsRowDivider()
+            // Theme presets — one-tap bundles coordinating accent + chart world + backdrop + card opacity.
+            // Derived (no stored value): tweaking any control below flips this to Custom.
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_preset)) {
+                ThemePresetDropdown(
+                    current = ThemePreset.matching(
+                        accentColor, chartStyle, showDayCycleBackground, (cardOpacity * 100).roundToInt(),
+                    ),
+                    onSelect = { p ->
+                        val accent = p.accent
+                        val chart = p.chart
+                        if (accent != null && chart != null) {
+                            accentColor = accent
+                            chartStyle = chart
+                            showDayCycleBackground = p.backdrop
+                            cardOpacity = p.cardOpacity / 100f
+                            AccentPrefs.setColor(context, accent)
+                            ChartStylePrefs.set(context, chart)
+                            NoopPrefs.setShowDayCycleBackground(context, p.backdrop)
+                            NoopPrefs.setCardOpacityPercent(context, p.cardOpacity)
+                        }
+                    },
+                )
+            }
+            SettingsRowDivider()
             SettingsFormRow(label = uiString(R.string.l10n_settings_screen_theme_a797e309)) {
                 SegmentedPillControl(
                     items = listOf(AppearanceMode.SYSTEM, AppearanceMode.LIGHT, AppearanceMode.DARK),
                     selection = themeMode,
-                    label = { it.label },
+                    label = {
+                        when (it) {
+                            AppearanceMode.SYSTEM -> uiString(R.string.settings_language_system)
+                            AppearanceMode.LIGHT -> uiString(R.string.settings_theme_light)
+                            AppearanceMode.DARK -> uiString(R.string.settings_theme_dark)
+                        }
+                    },
                     onSelect = { mode ->
                         themeMode = mode
                         AppearancePrefs.set(context, mode)
@@ -1072,7 +1144,10 @@ fun SettingsScreen(
                 SegmentedPillControl(
                     items = listOf(ChartStyle.TITANIUM, ChartStyle.CLASSIC),
                     selection = chartStyle,
-                    label = { it.label },
+                    label = {
+                        if (it == ChartStyle.CLASSIC) uiString(R.string.settings_chart_classic)
+                        else uiString(R.string.settings_chart_default)
+                    },
                     onSelect = { style ->
                         chartStyle = style
                         ChartStylePrefs.set(context, style)
@@ -1110,7 +1185,10 @@ fun SettingsScreen(
                 SegmentedPillControl(
                     items = listOf(TrendChartStyle.LINE, TrendChartStyle.BAR),
                     selection = trendChartStyle,
-                    label = { if (it == TrendChartStyle.BAR) "Bars" else "Line" },
+                    label = {
+                        if (it == TrendChartStyle.BAR) uiString(R.string.settings_trend_bars)
+                        else uiString(R.string.settings_trend_line)
+                    },
                     onSelect = { style ->
                         trendChartStyle = style
                         UnitPrefs.setTrendChartStyle(context, style)
@@ -1122,7 +1200,15 @@ fun SettingsScreen(
             // timeline; "Filled" swaps the Sleep tab's stage chart for a single stepped hypnogram with the
             // stages stacked by depth and each column filled to the baseline. Same data either way; this only
             // changes the drawing, and it falls back to Classic on a night with no timestamped segments.
-            SettingsFormRow(label = "Sleep chart") {
+            // A full-width (adaptsToAvailableWidth) control can't share a SettingsFormRow's single line with
+            // a beside-label: it fills the width and starves the weighted label to a tall wrapped sliver,
+            // ballooning the row (the #1129 gap). Stack it — label on its own line, equal-width segments
+            // below — which is how a full-width segmented control is meant to be laid out.
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Sleep chart", style = NoopType.body, color = Palette.textPrimary)
                 SegmentedPillControl(
                     items = listOf(SleepChartStyle.CLASSIC, SleepChartStyle.FILLED, SleepChartStyle.RIBBON),
                     selection = sleepChartStyle,
@@ -1137,7 +1223,7 @@ fun SettingsScreen(
                         sleepChartStyle = style
                         UnitPrefs.setSleepChartStyle(context, style)
                     },
-                    // Three segments — share the row width equally so the labels can't widen the card past
+                    // Three segments share the row width equally so the labels can't widen the card past
                     // the screen (the component's own guidance for longer option sets).
                     adaptsToAvailableWidth = true,
                 )
@@ -3223,51 +3309,156 @@ private fun setAppIcon(context: Context, navy: Boolean) {
     )
 }
 
-/** #accent: a compact RGB picker for the CUSTOM chrome accent — a live preview swatch + three channel
- *  sliders. Emits `#RRGGBB` on every change; the Palette accent updates live via [AccentPrefs]. Shown only
- *  when the accent picker is set to Custom. */
+/** sRGB [Color] for an HSV triple, via the framework converter (Material3 ships no HSV colour helper). */
+private fun hsvColor(h: Float, s: Float, v: Float): Color =
+    Color(android.graphics.Color.HSVToColor(floatArrayOf(h.coerceIn(0f, 360f), s.coerceIn(0f, 1f), v.coerceIn(0f, 1f))))
+
+/** #accent: the CUSTOM chrome-accent picker — a standard HSV colour picker (a saturation × brightness square
+ *  plus a hue rail), the recognisable "colour picker" UX with no third-party dependency. iOS uses the native
+ *  SwiftUI `ColorPicker`; this is its Compose counterpart (Material3 ships none). Emits `#RRGGBB` on every
+ *  change; the Palette accent updates live via [AccentPrefs]. Shown only when the accent picker is Custom. */
 @Composable
 private fun AccentCustomPicker(hex: String, onHexChange: (String) -> Unit) {
-    val base = AccentColor.parseHex(hex, Color(0xFF149A78))
-    var r by remember { mutableStateOf(base.red) }
-    var g by remember { mutableStateOf(base.green) }
-    var b by remember { mutableStateOf(base.blue) }
-    fun emit() = onHexChange(
-        String.format("#%02X%02X%02X", (r * 255).roundToInt(), (g * 255).roundToInt(), (b * 255).roundToInt()),
-    )
+    // Seed HSV from the current hex once (the picker only mounts while Custom is selected).
+    val seed = remember(Unit) {
+        FloatArray(3).also {
+            val c = AccentColor.parseHex(hex, Color(0xFF149A78))
+            android.graphics.Color.RGBToHSV(
+                (c.red * 255).roundToInt(), (c.green * 255).roundToInt(), (c.blue * 255).roundToInt(), it,
+            )
+        }
+    }
+    var hue by remember { mutableStateOf(seed[0]) }    // 0..360
+    var sat by remember { mutableStateOf(seed[1]) }    // 0..1
+    var value by remember { mutableStateOf(seed[2]) }  // 0..1
+    fun emit() {
+        val c = hsvColor(hue, sat, value)
+        onHexChange(
+            String.format("#%02X%02X%02X", (c.red * 255).roundToInt(), (c.green * 255).roundToInt(), (c.blue * 255).roundToInt()),
+        )
+    }
+    val density = LocalDensity.current
+
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            Modifier
+        // Saturation (x) × brightness (y) square, tinted by the current hue.
+        BoxWithConstraints(
+            modifier = Modifier
                 .fillMaxWidth()
-                .height(26.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(r, g, b, 1f)),
-        )
-        AccentChannelSlider("R", r) { r = it; emit() }
-        AccentChannelSlider("G", g) { g = it; emit() }
-        AccentChannelSlider("B", b) { b = it; emit() }
+                .height(150.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, Palette.hairline, RoundedCornerShape(12.dp)),
+        ) {
+            val wPx = constraints.maxWidth.toFloat()
+            val hPx = constraints.maxHeight.toFloat()
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Brush.horizontalGradient(listOf(Color.White, hsvColor(hue, 1f, 1f))))
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            // Consume the down so the vertically-scrolling settings list can't steal a
+                            // drag inside the picker (esp. the square's vertical brightness axis).
+                            val down = awaitFirstDown().also { it.consume() }
+                            fun set(x: Float, y: Float) {
+                                sat = (x / wPx).coerceIn(0f, 1f)
+                                value = (1f - y / hPx).coerceIn(0f, 1f)
+                                emit()
+                            }
+                            set(down.position.x, down.position.y)
+                            drag(down.id) { set(it.position.x, it.position.y); it.consume() }
+                        }
+                    },
+            )
+            Box(
+                Modifier
+                    .offset(
+                        x = with(density) { (sat * wPx).toDp() } - 9.dp,
+                        y = with(density) { ((1f - value) * hPx).toDp() } - 9.dp,
+                    )
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(hsvColor(hue, sat, value))
+                    .border(2.dp, Color.White, CircleShape),
+            )
+        }
+        // Hue rail (0..360°).
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth().height(22.dp).clip(RoundedCornerShape(50)),
+        ) {
+            val wPx = constraints.maxWidth.toFloat()
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Brush.horizontalGradient((0..6).map { hsvColor(it * 60f, 1f, 1f) }))
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            // Consume the down so the vertically-scrolling settings list can't steal a
+                            // drag inside the picker (esp. the square's vertical brightness axis).
+                            val down = awaitFirstDown().also { it.consume() }
+                            fun set(x: Float) {
+                                hue = (x / wPx).coerceIn(0f, 1f) * 360f
+                                emit()
+                            }
+                            set(down.position.x)
+                            drag(down.id) { set(it.position.x); it.consume() }
+                        }
+                    },
+            )
+            Box(
+                Modifier
+                    .offset(x = with(density) { ((hue / 360f) * wPx).toDp() } - 11.dp)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(hsvColor(hue, 1f, 1f))
+                    .border(2.dp, Color.White, CircleShape),
+            )
+        }
     }
 }
 
+/** #theme: the theme-PRESET picker — a pill showing the current (derived) preset, opening a menu of the
+ *  selectable presets. Picking one writes accent + chart world + backdrop + card opacity at once; the
+ *  granular controls below stay available and flip this back to Custom when tweaked. */
 @Composable
-private fun AccentChannelSlider(label: String, value: Float, onChange: (Float) -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(label, style = NoopType.caption, color = Palette.textTertiary, modifier = Modifier.width(14.dp))
-        Slider(
-            value = value,
-            onValueChange = onChange,
-            colors = SliderDefaults.colors(
-                thumbColor = Palette.accent,
-                activeTrackColor = Palette.accent,
-                inactiveTrackColor = Palette.surfaceInset,
-            ),
-            modifier = Modifier.weight(1f),
-        )
+private fun ThemePresetDropdown(current: ThemePreset, onSelect: (ThemePreset) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .clickable { expanded = true }
+                .background(Palette.surfaceInset)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(current.label, style = NoopType.subhead, color = Palette.textPrimary)
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Palette.textSecondary)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ThemePreset.selectable.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p.label, color = Palette.textPrimary) },
+                    onClick = {
+                        expanded = false
+                        onSelect(p)
+                    },
+                )
+            }
+        }
     }
+}
+
+/** Compose may provide a themed ContextWrapper rather than the Activity directly. */
+private fun Context.hostingActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return current as? Activity
 }
