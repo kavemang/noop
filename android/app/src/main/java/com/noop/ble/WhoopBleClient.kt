@@ -2124,6 +2124,7 @@ class WhoopBleClient(
      * UI's 15-min analysis tick (which also doesn't run at all with the app UI closed and only the
      * foreground service alive). Mirrors the AppViewModel loop's profile + writeback behaviour. (#78 fork)
      */
+    @Suppress("UNUSED_PARAMETER")
     private fun onBackfillChunkCommitted(batch: StreamBatch) {
         decodedChunksThisSession += 1   // invoked once per non-empty decoded chunk (#77 family tally)
         if (!analyzeAfterBackfillScheduled.compareAndSet(false, true)) return
@@ -2148,6 +2149,16 @@ class WhoopBleClient(
                 // this brings Android into lockstep. Captured before the run, written only on success, so an
                 // interrupted/failed pass can never advance the watermark past unscored data.
                 val analyzeFp = repository.hrFingerprint()
+                // Attribute this forced post-offload re-score. A completed offload ALWAYS re-scores (#836),
+                // so an EMPTY/duplicate offload (rows=0, common on a flapping link) still pays for a full
+                // ~18-day pass over the whole raw store (#1146). Compare the pre-run HR fingerprint
+                // (rowCount:maxTs) to the watermark the last successful run advanced: `newData=no` means
+                // nothing changed since the last run — a re-score driven purely by the reconnect+offload, not
+                // by data. These lines quantify the background battery cost (#1005). Log-only; behaviour is
+                // unchanged (the pass still runs, matching Swift's force-re-score after a completed backfill).
+                log("re-score: trigger=post-offload newData=" +
+                    if (analyzeFp != NoopPrefs.analyzeWatermark(context)) "yes"
+                    else "no (empty/duplicate offload — nothing changed since last run)")
                 runCatching {
                     IntelligenceEngine.analyzeRecent(
                         repo = repository,
@@ -2218,6 +2229,9 @@ class WhoopBleClient(
                             if (testCentre.active(com.noop.testcentre.TestDomain.STEPS))
                                 { s -> log(s, com.noop.testcentre.TestDomain.STEPS) }
                             else null,
+                        // #103: SpO₂ candidate @82 display toggle — when ON, the engine computes and
+                        // persists the nightly @82 mean as "spo2_candidate" in metricSeries.
+                        spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(context),
                     )
                 }.onSuccess {
                     // Advance the shared watermark so the next 15-min tick sees no change and skips (#836).
@@ -5573,6 +5587,18 @@ class WhoopBleClient(
                                 _state.update { s -> s.copy(batteryMv = mv) }
                             }
                         }
+                        // The strap raises CHARGING_ON(7)/CHARGING_OFF(8) the instant a pack goes on or comes
+                        // off — so flip the charging pill directly instead of waiting on the ~8-min
+                        // BATTERY_LEVEL cadence, which was the only thing moving it before. Same historical-
+                        // replay exclusion as the battery event: a replayed offload event must not move the
+                        // LIVE pill. Ported from tanarchytan/noop @72ac14d9.
+                        if (shouldApplyChargingFromBatteryEvent(replayedOffload)) {
+                            if (ev.startsWith("CHARGING_ON")) {
+                                _state.update { s -> s.copy(charging = true) }
+                            } else if (ev.startsWith("CHARGING_OFF")) {
+                                _state.update { s -> s.copy(charging = false) }
+                            }
+                        }
                         // PR #577: the strap fired its firmware smart alarm (STRAP_DRIVEN_ALARM_EXECUTED,
                         // event 57) → re-arm the next day's instant (single absolute time, no recurrence).
                         // This is NOT a gesture, so it MUST dispatch from here — the gesture branch never
@@ -6079,8 +6105,8 @@ class WhoopBleClient(
         handler.postDelayed({
             if (ecgGateReport == null || ecgGateStep != armed) return@postDelayed
             send(CommandNumber.GET_DEVICE_CONFIG_VALUE, DeviceConfigWriteGate.readBackPayload())
-            handler.postDelayed({
-                if (ecgGateReport == null || ecgGateStep != armed) return@postDelayed
+            handler.postDelayed(readBack@{
+                if (ecgGateReport == null || ecgGateStep != armed) return@readBack
                 ecgGateReport?.noteReadBackTimeout((ecgGateReadBackTimeoutMs / 1000).toInt())
                 finishEcgGateWrite()
             }, ecgGateReadBackTimeoutMs)
@@ -6454,6 +6480,7 @@ class WhoopBleClient(
      * mirroring how the Swift code writes the bond frame inline in didDiscoverCharacteristicsFor.
      */
     @SuppressLint("MissingPermission")
+    @Suppress("UNUSED_PARAMETER") // `g` kept for signature symmetry with the other write* frame helpers
     private fun writeBondFrame(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
         val ops = gattOps ?: return
         val s = seq.incrementAndGet() and 0xFF
@@ -6481,6 +6508,7 @@ class WhoopBleClient(
      * notify subscriptions). Unverified on real MG hardware.
      */
     @SuppressLint("MissingPermission")
+    @Suppress("UNUSED_PARAMETER") // `g` kept for signature symmetry with the other write* frame helpers
     private fun writeClientHello(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
         val hello = DeviceFamily.WHOOP5.clientHello ?: return
         val ops = gattOps ?: return
