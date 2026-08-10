@@ -93,6 +93,15 @@
     <!-- Trends / Explore / Deep Timeline , see the English values/strings.xml comment for scope.
          Wording matches the existing iOS/macOS German catalog entries where one exists. -->
     <string name="trends_subtitle">Der rote Faden deiner Zeit.</string>
+    <string name="trends_trailing">Letzte</string>
+    <string name="trends_trailing_days">Letzte %1$d Tage</string>
+    <string name="trends_all_history">Gesamter Verlauf</string>
+    <string name="trends_trend">Trend</string>
+    <string name="trends_trend_a11y">Trend: %1$s</string>
+    <plurals name="trends_n_days">
+        <item quantity="one">%1$d Tag</item>
+        <item quantity="other">%1$d Tage</item>
+    </plurals>
     <string name="trends_charge">Ladung</string>
     <string name="trends_effort">Anstrengung</string>
     <string name="trends_rest">Ruhe</string>
@@ -1969,4 +1978,7 @@
     <string name="cycle_phase_learning">Dein Muster wird gelernt</string>
     <string name="cycle_day_single">· ~Tag %1$d</string>
     <string name="cycle_day_range">· ~Tag %1$d–%2$d</string>
+    <string name="skin_temp_missing_caption">Noch keine nächtliche Hauttemperatur — benötigt ~4 getragene Nächte (oder importiere eine WHOOP-CSV)</string>
+    <string name="skin_temp_delta_title">Hauttemperatur Δ</string>
+    <string name="skin_temp_vs_baseline">ggü. Basiswert</string>
 </resources>

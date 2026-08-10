@@ -1596,6 +1596,15 @@
     <string name="terms_checkbox">He leído y acepto estos términos, y uso NOOP con mi propio dispositivo y mis propios datos, bajo mi propio riesgo.</string>
     <string name="terms_accept">Aceptar y continuar</string>
     <string name="trends_subtitle">El hilo de ti a lo largo del tiempo.</string>
+    <string name="trends_trailing">Últimos</string>
+    <string name="trends_trailing_days">Últimos %1$d días</string>
+    <string name="trends_all_history">Todo el historial</string>
+    <string name="trends_trend">Tendencia</string>
+    <string name="trends_trend_a11y">Tendencia: %1$s</string>
+    <plurals name="trends_n_days">
+        <item quantity="one">%1$d día</item>
+        <item quantity="other">%1$d días</item>
+    </plurals>
     <string name="trends_charge">Carga</string>
     <string name="trends_effort">Esfuerzo</string>
     <string name="trends_rest">Descanso</string>
@@ -1954,4 +1963,7 @@
     <string name="cycle_phase_learning">Aprendiendo tu patrón</string>
     <string name="cycle_day_single">· ~día %1$d</string>
     <string name="cycle_day_range">· ~día %1$d–%2$d</string>
+    <string name="skin_temp_missing_caption">Aún no hay temperatura cutánea nocturna: necesita ~4 noches de uso (o importa un CSV de WHOOP)</string>
+    <string name="skin_temp_delta_title">Temp. de piel Δ</string>
+    <string name="skin_temp_vs_baseline">vs. referencia</string>
 </resources>
