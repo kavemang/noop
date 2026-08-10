@@ -274,6 +274,10 @@ fun TodayScreen(
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
     val days by viewModel.recentDays.collectAsStateWithLifecycle()
     val spo2CandidateByDay by viewModel.spo2CandidateByDay.collectAsStateWithLifecycle()
+    val v5Signals by viewModel.v5Signals.collectAsStateWithLifecycle()
+    val cycleEnabled by viewModel.cycleTrackingEnabled.collectAsStateWithLifecycle()
+    val periodStarts by viewModel.periodStarts.collectAsStateWithLifecycle()
+    var showCycleTracker by remember { mutableStateOf(false) }
     val live by viewModel.live.collectAsStateWithLifecycle()
     // The in-flight manual workout (single source of truth, survives an app kill via rehydration), so the
     // indicator card auto-appears/clears off this alone. Null↔non-null + the start drive the card; the
@@ -1347,6 +1351,9 @@ fun TodayScreen(
                     selectedDayOffset == 0 && (liveSessionsEnabled || activeLiveSession != null)
                 TodaySection.YOUR_CARDS ->
                     selectedDayOffset == 0 && visibleDashboardCards.isNotEmpty()
+                TodaySection.MENSTRUAL_CYCLE ->
+                    selectedDayOffset == 0 &&
+                        (cycleOptInApplies(profileStore.sex) || cycleEnabled || periodStarts.isNotEmpty())
                 TodaySection.JOURNAL ->
                     selectedDayOffset == 0 && journalReminderOn
                 else -> true
@@ -1546,6 +1553,17 @@ fun TodayScreen(
                             onCustomise = { showDashboardEditor = true },
                             spo2CandidateByDay = spo2CandidateByDay,
                         )
+                        TodaySection.MENSTRUAL_CYCLE -> MenstrualCycleHomeCard(
+                            enabled = cycleEnabled,
+                            result = v5Signals?.cycle,
+                            starts = periodStarts,
+                            onSetUp = {
+                                viewModel.setCycleTrackingEnabled(true)
+                                showCycleTracker = true
+                            },
+                            onOpen = { showCycleTracker = true },
+                            onLogToday = { viewModel.logPeriodStart() },
+                        )
                         // #656: the persistent journal widget (last-7-days strip + tap-through). Now a
                         // reorderable section like the others — hold-drag or Arrange moves it. Today-only
                         // and enabled-gated at the loop level (sectionVisible) so it never leaves a blank
@@ -1585,6 +1603,19 @@ fun TodayScreen(
             PullToRefreshContainer(
                 state = pullToSyncState,
                 modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
+    }
+
+    if (showCycleTracker) {
+        v5Signals?.cycle?.let { cycle ->
+            CycleTrackerDialog(
+                result = cycle,
+                starts = periodStarts,
+                onLog = viewModel::logPeriodStart,
+                onDelete = viewModel::deletePeriodStart,
+                onDeleteAll = viewModel::deleteAllPeriodStarts,
+                onDismiss = { showCycleTracker = false },
             )
         }
     }
@@ -1898,8 +1929,8 @@ private fun QuickActionDisc(onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
-            // 34dp to sit level with the heart / avatar / battery ring in the liquid header cluster.
-            .size(34.dp)
+            // Sit level with the avatar / battery ring in the liquid header cluster (shared size).
+            .size(HeaderClusterControl)
             .liquidPress(interaction)
             .clip(CircleShape)
             // A translucent-white disc so the + reads on the day-of-sky like the rest of the liquid cluster,
@@ -2003,8 +2034,13 @@ private fun ScoringGuideIntroCard(onOpen: () -> Unit, onDismiss: () -> Unit) {
 // recording-light + bell header). LEFT: a tappable title block — the big rounded-bold day title over a human
 // date line ("Friday, 3 July"), tap opens the day picker. RIGHT: exactly the iOS four controls, in order —
 // a filled HEART (→ Support), the PROFILE AVATAR (→ Settings), a "+" ADD button (→ quick actions), and the
-// strap BATTERY RING (→ Devices). Each ~34dp, spacing ~8dp. There is no recording light and no bell here;
+// strap BATTERY RING (→ Devices). Each ~36dp, spacing ~8dp. There is no recording light and no bell here;
 // iOS's Today header has neither, and the Updates inbox is relocated into the "+" quick-actions sheet.
+
+/** The uniform diameter of the round Today-header controls — profile avatar, quick-add (+) and the strap
+ *  battery ring — so they sit level in the liquid cluster (the sync chip beside them is content-sized).
+ *  Single source of truth so a size tweak keeps all three in lockstep. */
+private val HeaderClusterControl = 36.dp
 
 @Composable
 private fun LiquidTodayHeader(
@@ -2095,7 +2131,7 @@ private fun LiquidTodayHeader(
             )
         }
 
-        // RIGHT: the controls, in order — [sync chip] · avatar · + · battery ring. Each ~34dp, 8dp apart.
+        // RIGHT: the controls, in order — [sync chip] · avatar · + · battery ring. Each ~36dp, 8dp apart.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2110,7 +2146,7 @@ private fun LiquidTodayHeader(
             // (a) Profile avatar (the photo set in Settings, or the NOOP loop mark) → Settings. Mirrors iOS.
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(HeaderClusterControl)
                     .clip(CircleShape)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -2120,10 +2156,10 @@ private fun LiquidTodayHeader(
                     .semantics { contentDescription = uiString(R.string.l10n_today_screen_profile_and_settings_9b3d12f2) },
                 contentAlignment = Alignment.Center,
             ) {
-                ProfileAvatar(size = 34.dp)
+                ProfileAvatar(size = HeaderClusterControl)
             }
             // (b) Quick-add (+), the accented primary. Mirrors iOS's LiquidAddButton (a glyph on a translucent
-            // disc → the quick-actions menu). Sized 34dp to match the rest of the liquid cluster.
+            // disc → the quick-actions menu). Sized to match the rest of the liquid cluster (shared HeaderClusterControl).
             QuickActionDisc(onClick = onQuickActions)
             // (c) Strap battery ring showing the % (iOS LiquidBatteryButton). Tap → Devices.
             LiquidBatteryRing(batteryPct = batteryPct, onClick = onOpenDevices)
@@ -2179,9 +2215,12 @@ private fun ChipCapsule(icon: ImageVector, text: String, tint: Color, desc: Stri
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
+            // Match the round header controls' height so the pill sits the same size in the cluster
+            // (#1207 follow-up); width stays content-driven. Content centres via the fixed height.
+            .height(HeaderClusterControl)
             .clip(RoundedCornerShape(50))
             .background(Palette.surfaceInset)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .padding(horizontal = 10.dp),
     ) {
         Icon(icon, contentDescription = desc, tint = tint, modifier = Modifier.size(14.dp))
         Text(text, style = NoopType.caption, color = tint)
@@ -2197,7 +2236,7 @@ private fun LiquidBatteryRing(batteryPct: Double?, onClick: () -> Unit) {
     val label = batteryPct?.let { "Strap battery ${it.roundToInt()} percent" } ?: "Strap battery"
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(HeaderClusterControl)
             .liquidPress(interaction)
             .clip(CircleShape)
             // A translucent near-black disc + faint white rim, matching iOS (rgba(10,11,16,.5) + white@.15).
@@ -2218,7 +2257,7 @@ private fun LiquidBatteryRing(batteryPct: Double?, onClick: () -> Unit) {
                 pct < 35 -> Palette.statusWarning
                 else -> Palette.chargeColor
             }
-            Canvas(modifier = Modifier.size(34.dp).padding(2.5.dp)) {
+            Canvas(modifier = Modifier.size(HeaderClusterControl).padding(2.5.dp)) {
                 val strokePx = 3.dp.toPx()
                 val d = size.minDimension - strokePx
                 val topLeft = Offset((size.width - d) / 2f, (size.height - d) / 2f)

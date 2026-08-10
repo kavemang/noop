@@ -283,6 +283,8 @@ struct LiquidTodayView: View {
                         case .heartRate: heartRateSection
                         case .recoveryVitals: recoveryVitalsSection
                         case .yourCards: yourCardsSection
+                        case .menstrualCycle:
+                            if selectedDayOffset == 0 { MenstrualCycleHomeCard() }
                         // #656: the persistent journal widget (last-7-days strip + tap-through). Now a
                         // reorderable section like the others — the Arrange sheet moves it. Today only;
                         // the card self-hides when the reminder toggle is off (an empty branch renders
@@ -460,7 +462,7 @@ struct LiquidTodayView: View {
                 HStack(spacing: 8) {
                     // Profile pic (the one set in Settings) → opens Settings, matching the classic Today.
                     Button { showSettings = true } label: {
-                        Color.clear.frame(width: 34, height: 34)
+                        Color.clear.frame(width: headerClusterControl, height: headerClusterControl)
                     }
                     .nativeLiquidGlassHeaderButton()
                     .overlay {
@@ -481,7 +483,7 @@ struct LiquidTodayView: View {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(StrandPalette.textPrimary)
-                            .frame(width: 34, height: 34)
+                            .frame(width: headerClusterControl, height: headerClusterControl)
                     }
                     .nativeLiquidGlassHeaderButton()
                     .accessibilityLabel("Customize Today")
@@ -1627,6 +1629,11 @@ private struct LiquidRefreshIndicator: View {
     }
 }
 
+/// The uniform diameter of the round Today-header controls — profile avatar, quick-add (+), strap battery
+/// ring and Customize — so they sit level in the liquid cluster. Single source of truth (mirrors the
+/// Android `HeaderClusterControl`); the syncing vessel is a separate affordance and keeps its own size.
+private let headerClusterControl: CGFloat = 36
+
 private struct LiquidAddButton: View {
     @EnvironmentObject var router: NavRouter
     var body: some View {
@@ -1634,7 +1641,7 @@ private struct LiquidAddButton: View {
             Image(systemName: "plus")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(StrandPalette.textPrimary)
-                .frame(width: 34, height: 34)
+                .frame(width: headerClusterControl, height: headerClusterControl)
         }
         .nativeLiquidGlassHeaderButton()
         .accessibilityLabel("Quick actions")
@@ -1964,7 +1971,7 @@ private struct LiquidBatteryButton: View {
                         .foregroundStyle(StrandPalette.textTertiary)
                 }
             }
-            .frame(width: 34, height: 34)
+            .frame(width: headerClusterControl, height: headerClusterControl)
         }
         .nativeLiquidGlassHeaderButton()
         .accessibilityLabel(batteryAccessibility)
