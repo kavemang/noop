@@ -735,7 +735,7 @@ fun SleepScreen(
                         SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
                             Column {
                                 Spacer(Modifier.height(Metrics.selectorTopUp))
-                                MetricGrid(m, onMetricClick = { detailMetricKey = it })
+                                NightDetailHostCard(m, onMetricClick = { detailMetricKey = it })
                             }
                         }
                     }
@@ -759,7 +759,7 @@ fun SleepScreen(
                         SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
                             Column {
                                 Spacer(Modifier.height(Metrics.selectorTopUp))
-                                StagesVsTypical(selectedModel)
+                                StagesVsTypicalHostCard(selectedModel)
                             }
                         }
                     }
@@ -2369,6 +2369,18 @@ private fun NightNavHeader(
 
 // MARK: - 2. Metric grid (row-equalized min-height tiles, each with a bottom sparkline)
 
+/**
+ * #today-hosted-cards: the "Night detail" metric grid rendered from the shared [SleepModel]. `internal` so
+ * the Today host (TodayScreen) can render the SAME grid the Sleep tab does (a mirror, not a copy); lives
+ * here so its [MetricGrid]/[SparkTile] siblings stay in-file. Twin of the iOS `NightDetailCard`. The Sleep
+ * tab passes an [onMetricClick] to open per-metric detail; the Today host omits it (no detail sheet there),
+ * so the tiles render read-only when hosted.
+ */
+@Composable
+internal fun NightDetailHostCard(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
+    MetricGrid(m, onMetricClick = onMetricClick)
+}
+
 @Composable
 private fun MetricGrid(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
     val tiles = listOf<@Composable (Modifier) -> Unit>(
@@ -2571,8 +2583,14 @@ private fun DebtDeltaBars(ledger: SleepDebtLedger) {
 
 // MARK: - 3. Stages vs typical
 
+/**
+ * #today-hosted-cards: the "Stages vs typical" card — last night's Deep/REM/Light against the wearer's
+ * personal per-stage means from the shared [SleepModel]. `internal` so the Today host (TodayScreen) can
+ * render the SAME view the Sleep tab does (a mirror, not a copy); lives here so its StageRow/Hairline
+ * siblings are in-file. Twin of the iOS `StagesVsTypicalCard`.
+ */
 @Composable
-private fun StagesVsTypical(m: SleepModel) {
+internal fun StagesVsTypicalHostCard(m: SleepModel) {
     val s = m.stages
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader("Stages vs typical", overline = "Selected night", trailing = "marker = your mean")

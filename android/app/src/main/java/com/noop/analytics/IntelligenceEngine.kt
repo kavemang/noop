@@ -694,6 +694,19 @@ object IntelligenceEngine {
                     )
                     if (sample.isNotEmpty()) diag("hrv rrsample day=${res.daily.day} $sample")
                 }
+            } else if (res.sleepSessions.isEmpty()) {
+                // #1244: no in-sleep R-R AND no detected session (past the >=200-HR gate) = the "HR tracked,
+                // no sleep" case. Emit a counts-only reason line naming the inputs the stager had, so the
+                // report says WHY nothing staged. `window` is the read span in whole hours (30 h back → next
+                // local midnight, or +18 h for today). Byte-identical to the Swift line.
+                val windowHours = ((to - from) / 3_600L).toInt()
+                diag(
+                    sleepDetectNoNightLogLine(
+                        day = day, hrCount = hr.size, rrCount = rr.size, respCount = resp.size,
+                        gravCount = grav.size, stepCount = steps.size, providedCount = providedSleep.size,
+                        windowHours = windowHours,
+                    ),
+                )
             }
 
             // Steps test mode: emit the 5/MG raw-counter trace for this day (cumulative @57 series +
@@ -1367,14 +1380,28 @@ object IntelligenceEngine {
         // reconcile window: exactly the days this pass re-scored/evicted, so a session row is never
         // deleted out from under a daily row the pass did not refresh. Edited rows are never dropped.
         // Mirrors the Swift analyzeRecent heal.
-        val storedSessions = repo.sleepSessions(computedId, windowStart, nowSeconds, 4000)
-        val healable = storedSessions.filter {
-            AnalyticsEngine.dayString(it.endTs, tzOffsetSeconds) in oldestDay..newestDay
+        // #1248: heal EVERY device that banks sleep in this window, not just `computedId`. A live source
+        // (an Oura ring) banks its OWN hypnogram under its device id; a night re-banked there accumulates
+        // overlapping copies the computedId-only heal never saw — and, worse, those un-healed ring rows are
+        // re-read as `providedSleep` and re-detected every pass, so one night ballooned to 14 rows / 9
+        // "naps". Dedup each device's rows AMONG THEMSELVES and delete stale copies under that SAME id
+        // (deleteSleepSessionRowOnly deletes under the row's own deviceId), never across ids, so a survivor
+        // is never orphaned under an id the day-owner read skips. `freshStarts` (this pass's computed bank
+        // witness) only matches the computedId rows; the others fall back to longest-wins, the read-side
+        // dedup's own default. Sorted for a deterministic order. Mirrors the Swift analyzeRecent heal.
+        val healDeviceIds = healDeviceIds(computedId, candidatePriorities.map { it.first })
+        val healDropped = ArrayList<SleepSession>()
+        for (healId in healDeviceIds) {
+            val storedSessions = repo.sleepSessions(healId, windowStart, nowSeconds, 4000)
+            val healable = storedSessions.filter {
+                AnalyticsEngine.dayString(it.endTs, tzOffsetSeconds) in oldestDay..newestDay
+            }
+            val dropped = SleepSessionDedup.dedupe(healable, freshStarts = keptStarts).dropped
+            // Row-only delete: the user-facing deleteSleepSession writes a #33 dismissal tombstone, which
+            // would overlap the SURVIVING night's window and permanently suppress its re-detection.
+            for (stale in dropped) repo.deleteSleepSessionRowOnly(stale)
+            healDropped.addAll(dropped)
         }
-        val healDropped = SleepSessionDedup.dedupe(healable, freshStarts = keptStarts).dropped
-        // Row-only delete: the user-facing deleteSleepSession writes a #33 dismissal tombstone, which
-        // would overlap the SURVIVING night's window and permanently suppress its re-detection.
-        for (stale in healDropped) repo.deleteSleepSessionRowOnly(stale)
         if (healDropped.isNotEmpty()) {
             diag(
                 "Dedup(#899): removed ${healDropped.size} overlapping duplicate sleep " +
@@ -1961,4 +1988,34 @@ object IntelligenceEngine {
         return "rhr day=$day floor=$floor nightMean=$meanLog inBedSamples=${inBedBpms.size} " +
             "(floor = WHOOP-style lowest-sustained = NOOP RHR; mean = sleeping-HR-app number)"
     }
+
+    /**
+     * #1244: one line for a day that CLEARED the >=200-HR gate yet detected NO in-bed session, so the
+     * dashboard shows "HR tracked but no sleep". Today only the summary `sleep day=... totalSleepMin=nil`
+     * rides the log — with no clue WHY, since every other night trace (`rhr`/`rrsample`/`hrv diag`) only
+     * emits once a session exists. This names the raw inputs the stager was handed so the next capture
+     * separates the causes: `grav=0` = no motion offloaded (the in-bed detector can't gate — the WHOOP
+     * 4.0 sparse-motion path has no HR-only fallback); a large `hr` with a night still empty = coverage
+     * gap or the sleep hours fell outside `window`; `provided=` = a persisted hypnogram was (not) available.
+     * Counts + a window length only — same privacy class as the sibling `sleep day=` line, no PII. Pure so
+     * it's unit-tested directly; byte-identical to the Swift `sleepDetectNoNightLogLine`.
+     */
+    internal fun sleepDetectNoNightLogLine(
+        day: String, hrCount: Int, rrCount: Int, respCount: Int, gravCount: Int,
+        stepCount: Int, providedCount: Int, windowHours: Int,
+    ): String {
+        return "sleep-detect day=$day NO-NIGHT hr=$hrCount rr=$rrCount resp=$respCount " +
+            "grav=$gravCount steps=$stepCount provided=$providedCount window=${windowHours}h"
+    }
+
+    /**
+     * #1248: the device ids the banked-sleep heal (#899) must sweep — the computed-scores id AND every
+     * registered device id. A live source (an Oura ring) banks its OWN hypnogram under its OWN device id,
+     * so a computedId-only heal never sees (or collapses) those rows, and they are re-read as
+     * `providedSleep` and re-detected every pass — one night ballooned to 14 stored rows / 9 phantom
+     * "naps". The de-duplicated union, sorted for a deterministic sweep order. Pure so it's unit-tested
+     * directly; byte-identical to the Swift `healDeviceIds`.
+     */
+    internal fun healDeviceIds(computedId: String, registeredIds: List<String>): List<String> =
+        (listOf(computedId) + registeredIds).toSortedSet().toList()
 }

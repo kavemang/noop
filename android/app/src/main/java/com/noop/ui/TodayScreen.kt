@@ -3070,6 +3070,20 @@ private fun HostedCardsSection(cards: List<HostedCard>, days: List<DailyMetric>,
     if (cards.isEmpty()) return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // #today-hosted-cards: the SleepModel-backed hosted sleep cards (Stages vs typical today; more to
+    // follow). Build the shared model ONCE, and only when at least one such card is actually hosted, so a
+    // Today hosting none pays no cost. Same inputs + builder as the Sleep tab (buildHostedSleepModel), so
+    // hosted numbers match the Sleep tab. Reused by every model-backed card. Twin of the iOS hostedSleepModel.
+    val modelBackedHosted = setOf(HostedCard.STAGES_VS_TYPICAL, HostedCard.NIGHT_DETAIL)
+    val needsSleepModel = cards.any { it in modelBackedHosted }
+    var hostedSleepModel by remember { mutableStateOf<SleepModel?>(null) }
+    LaunchedEffect(needsSleepModel, days, viewModel.activeStrapId) {
+        hostedSleepModel = if (needsSleepModel) {
+            buildHostedSleepModel(viewModel.repo, viewModel.activeStrapId, days)
+        } else {
+            null
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap)) {
         cards.forEach { card ->
             when (card) {
@@ -3092,6 +3106,15 @@ private fun HostedCardsSection(cards: List<HostedCard>, days: List<DailyMetric>,
                     val (hours, dates) = sleepDurationTrend(days)
                     AsleepDurationHostCard(hours = hours, dates = dates)
                 }
+                // #today-hosted-cards: last night's stages vs the wearer's personal per-stage means, rendered
+                // from the SAME shared SleepModel the Sleep tab uses (mirror, not copy). Until the async build
+                // lands — or on a device with no stage data — the model is null and the slot renders nothing
+                // this frame, matching how the Sleep tab guards the section on a null model.
+                HostedCard.STAGES_VS_TYPICAL -> hostedSleepModel?.let { StagesVsTypicalHostCard(it) }
+                // #today-hosted-cards: the Night-detail metric grid, rendered from the SAME shared SleepModel
+                // the Sleep tab uses (mirror, not copy). Null until the async build lands / no stage data —
+                // the slot renders nothing this frame, matching the Sleep tab's null-model guard.
+                HostedCard.NIGHT_DETAIL -> hostedSleepModel?.let { NightDetailHostCard(it) }
             }
         }
     }
@@ -3538,6 +3561,11 @@ internal fun <T> EditableVisibilityRows(
     // surfaces needing >=1 item can't be emptied. The hosted-cards editor (#today-hosted-cards) passes
     // true (opt-in: un-hosting the last card is valid).
     allowEmpty: Boolean = false,
+    // Optional grouping key for the Hidden ("Available") list. When set (the hosted-cards editor passes the
+    // card's origin, e.g. "Sleep" / "Trends"), the Available items render under one sub-header per group so
+    // a user browses by origin. null (Today sections, Key Metrics, Your Cards) keeps the flat list. The
+    // Shown list stays flat — it is the user's own cross-origin order. Twin of the Swift EditableLayoutList.
+    hiddenGroup: ((T) -> String)? = null,
 ) {
     val minShown = if (allowEmpty) 0 else 1
     Column(
@@ -3610,6 +3638,43 @@ internal fun <T> EditableVisibilityRows(
                 color = Palette.textTertiary,
                 modifier = Modifier.padding(vertical = Metrics.space12),
             )
+        } else if (hiddenGroup != null) {
+            // Grouped Available list: one sub-header per origin ("Sleep", "Trends"). Remove by identity
+            // (items are unique) so the move is index-free across the regrouped display.
+            val buckets = LinkedHashMap<String, MutableList<T>>()
+            hidden.forEach { item -> buckets.getOrPut(hiddenGroup(item)) { ArrayList() }.add(item) }
+            buckets.keys.toList().forEachIndexed { gi, groupName ->
+                Text(
+                    groupName,
+                    style = NoopType.overline,
+                    color = Palette.textTertiary,
+                    modifier = Modifier.padding(top = if (gi == 0) Metrics.space4 else Metrics.space12),
+                )
+                val itemsIn = buckets.getValue(groupName)
+                itemsIn.forEachIndexed { ii, item ->
+                    val title = itemTitle(item)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = Metrics.space6),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(title, style = NoopType.body, color = Palette.textTertiary, modifier = Modifier.weight(1f))
+                        IconButton(
+                            onClick = { hidden.remove(item); shown.add(item) },
+                            modifier = Modifier.size(Metrics.iconButton),
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = stringResource(R.string.today_customize_show, title),
+                                tint = Palette.accent,
+                                modifier = Modifier.size(Metrics.iconSmall),
+                            )
+                        }
+                    }
+                    if (ii < itemsIn.lastIndex) {
+                        HorizontalDivider(color = Palette.hairline, thickness = Metrics.divider)
+                    }
+                }
+            }
         } else {
             hidden.forEachIndexed { index, item ->
                 val title = itemTitle(item)
@@ -3741,11 +3806,17 @@ private fun HostedCardsEditorDialog(
                     )
                 }
 
+                // Resolve the localized title/origin per card up front (composable-only calls can't run
+                // inside the plain itemTitle/hiddenGroup lambdas). The enum's raw title/origin stay the
+                // English source of truth; the UI shows the translated text.
+                val titleFor = HostedCard.entries.associateWith { it.localizedTitle() }
+                val originFor = HostedCard.entries.associateWith { it.localizedOrigin() }
                 EditableVisibilityRows(
                     shown = shown,
                     hidden = hidden,
-                    itemTitle = { it.title },
+                    itemTitle = { titleFor.getValue(it) },
                     allowEmpty = true,   // hosting is opt-in: un-hosting the last card is valid
+                    hiddenGroup = { originFor.getValue(it) },   // group the Available list by origin tab ("Sleep", "Trends")
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
