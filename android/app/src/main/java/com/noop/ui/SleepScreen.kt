@@ -442,10 +442,10 @@ fun SleepScreen(
     // at-a-glance TILES, the debt ledger, the personal need and the trend stay full-history /
     // latest-anchored, matching iOS SleepView. `selectedDay` re-points only the hero. Model is null
     // when the selected day has no stage minutes. (#5)
-    val model = remember(days, night, imported, napSleepMinByDay) {
+    val model = remember(days, night, imported, napSleepMinByDay, sleeps) {
         buildSleepModel(days, night?.session, imported, selectedDay = night?.dayKey,
             heroStages = night?.groupStages, heroSegments = night?.groupSegments,
-            napSleepMinByDay = napSleepMinByDay)
+            napSleepMinByDay = napSleepMinByDay, sessions = sleeps)
     }
     val display = remember(model, night) { heroDisplay(model, night) }
 
@@ -456,8 +456,8 @@ fun SleepScreen(
     // newest stage-bearing day instead of vanishing. The HERO stays on `model`/`display` (an
     // honest no-stage-data fallback for the bad day, edit pencil reachable). Null only when NO day
     // has stage data: the true first-run empty state.
-    val tilesModel = remember(model, days, imported, napSleepMinByDay) {
-        model ?: fallbackSleepModel(days, imported, napSleepMinByDay)
+    val tilesModel = remember(model, days, imported, napSleepMinByDay, sleeps) {
+        model ?: fallbackSleepModel(days, imported, napSleepMinByDay, sessions = sleeps)
     }
 
     // Jump straight to a night by its (local) wake-day — the center date block opens a picker.
@@ -476,10 +476,10 @@ fun SleepScreen(
         // settles into the theme canvas behind the header + hero, bled full-width up behind the status bar
         // via the scaffold's topBackground plumbing. Gated on the day-cycle preference exactly like Today
         // (showDayCycleBackground ? sky : plain canvas). Replaces the classic per-hero scene backdrop.
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        topBackground = screenBackdropSlot(showDayCycleBackground, skyBehindCards),
         // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way down
         // (Today / metric-detail parity — the same two prefs drive the same two behaviours everywhere).
-        fullBleedBackground = showDayCycleBackground && skyBehindCards,
+        fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
         // #65: the transient UNDO banner after a suppressing delete. Restores the deleted row into its
         // ORIGINAL namespace + lifts the tombstone. Mirrors the macOS SleepView sleepUndoBanner.
@@ -774,15 +774,29 @@ fun SleepScreen(
                         }
                     }
                 }
+                // #sleep-layout: the two former pinned detail cards are now arrangeable sections.
+                SleepSection.HOURS_VS_NEEDED -> tilesModel?.let { m ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                HoursVsNeededCard(m)
+                            }
+                        }
+                    }
+                }
+                // Gated on tilesModel to preserve the pre-refactor visibility (both cards shared one
+                // `tilesModel?.let` wrapper) — the card reads `sleeps`, not the model, but must not appear
+                // in the #940 phantom-edit state (night != null, tilesModel == null) where it didn't before.
+                SleepSection.CONSISTENCY -> if (tilesModel != null) item(key = k) {
+                    SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                        Column {
+                            Spacer(Modifier.height(Metrics.selectorTopUp))
+                            SleepConsistencyCard(sleeps, habitualMidsleep)
+                        }
+                    }
+                }
               }
-            }
-            // Android-only detail cards, pinned below the arrangeable region (iOS folds these into Night
-            // detail; making them arrangeable too is a #sleep-layout follow-up).
-            tilesModel?.let { m ->
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { HoursVsNeededCard(m) }
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { SleepConsistencyCard(sleeps, habitualMidsleep) }
             }
         }
     }
@@ -2649,6 +2663,52 @@ private fun DrawScope.drawRoundRectFill(color: Color, frac: Float) {
 
 // MARK: - 4. 14-day asleep-hours trend
 
+/**
+ * #today-hosted-cards P1: the hosted "Asleep duration" card — the hours-asleep BarChart from [DurationTrend],
+ * hours-only (no debt sub-chart, so no nap/session data needed), built from the pure [sleepDurationTrend].
+ * `internal` so the Today host (TodayScreen) can render it; lives here so its ChartCard/BarChart siblings
+ * are in-file. Twin of the iOS `AsleepDurationCard`.
+ */
+@Composable
+internal fun AsleepDurationHostCard(hours: List<Double>, dates: List<String>) {
+    val avg = hours.sleepAverageOrNull()
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        SectionHeader("Asleep duration", overline = "Sleep", trailing = "Last 14 days")
+        ChartCard(
+            title = uiString(R.string.l10n_sleep_screen_hours_asleep_06f68993),
+            subtitle = "Per night, trailing 14 days",
+            trailing = avg?.let { String.format(Locale.US, "%.1f h avg", it) },
+            tint = Palette.restColor,
+            footer = {
+                ChartFooter(
+                    listOf(
+                        "Avg" to (avg?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Min" to (hours.minOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Max" to (hours.maxOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Nights" to "${hours.size}",
+                    ),
+                )
+            },
+        ) {
+            if (hours.size >= 2) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BarChart(
+                        values = hours,
+                        modifier = Modifier.fillMaxWidth().height(Metrics.compactChartHeight)
+                            .semantics { contentDescription = uiString(R.string.l10n_sleep_screen_sleep_hours_trend_chart_a6fbc46d) },
+                        color = Palette.restColor,
+                        selectionEnabled = true,
+                        selectionLabels = dates.map(::shortDayLabel),
+                    )
+                    DateAxisRow(dates)
+                }
+            } else {
+                TrendPlaceholder()
+            }
+        }
+    }
+}
+
 @Composable
 private fun DurationTrend(m: SleepModel) {
     val pts = m.trendHours
@@ -2730,7 +2790,8 @@ private fun DurationTrend(m: SleepModel) {
 }
 
 @Composable
-private fun TrendPlaceholder() {
+// internal (not private) so the Today hosted-cards duration card (#today-hosted-cards) can reuse it.
+internal fun TrendPlaceholder() {
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
@@ -2760,8 +2821,9 @@ private fun TrendLegend(items: List<Pair<String, Color>>) {
     }
 }
 
+// internal (not private) so the Today hosted-cards duration card (#today-hosted-cards) can reuse it.
 @Composable
-private fun DateAxisRow(days: List<String>) {
+internal fun DateAxisRow(days: List<String>) {
     if (days.isEmpty()) return
     val labels = listOf(
         days.firstOrNull(),

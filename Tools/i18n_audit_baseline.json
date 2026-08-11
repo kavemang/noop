@@ -514,7 +514,15 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Background image"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
       "Blood Oxygen: strap estimate"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Browse files"
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
@@ -522,7 +530,15 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Choose from Photos"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
       "Choose photo"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Let the background show through every card. Tune how much just below."
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
@@ -546,7 +562,23 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Remove image"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Replace from Photos"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Scaling"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
       "Searching…"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Show custom background"
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
@@ -555,6 +587,10 @@
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
       "Surfaces the WHOOP 5/MG strap's nightly SpO₂ estimate (spo2_candidate_82) in the "
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
+      "Transparent cards"
     ],
     [
       "android/app/src/main/java/com/noop/ui/SettingsScreen.kt",
@@ -746,6 +782,14 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Active calories"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Active-calorie heatmap, last 13 weeks"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
       "Add"
     ],
     [
@@ -774,6 +818,14 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Export route"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "FIT"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
       "Finish selecting"
     ],
     [
@@ -782,7 +834,23 @@
     ],
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "GPX"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Last 13 weeks · daily burn"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Less"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
       "Logged sessions across ${effectiveRange.caption}."
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "More"
     ],
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
@@ -791,6 +859,10 @@
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
       "Save"
+    ],
+    [
+      "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",
+      "Save this GPS route as a file to import into Strava, Garmin Connect, or another app. "
     ],
     [
       "android/app/src/main/java/com/noop/ui/WorkoutsScreen.kt",

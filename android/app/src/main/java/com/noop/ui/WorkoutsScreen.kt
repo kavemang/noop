@@ -88,6 +88,15 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import com.noop.analytics.ActivityHeatmap
+import com.noop.analytics.RouteMath
+import com.noop.ingest.RouteExport
+import kotlinx.coroutines.launch
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -237,10 +246,10 @@ fun WorkoutsScreen(vm: AppViewModel) {
         // into the theme canvas behind the header + top rows (bled full-width up behind the status bar via
         // the scaffold's topBackground plumbing), and the cards float OVER it on the flat surface below. The
         // Android equivalent of the iOS `ScreenScaffold(topBackground: liquidScaffoldSky())`.
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        topBackground = screenBackdropSlot(showDayCycleBackground, skyBehindCards),
         // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way
         // down (Today / Trends / Sleep / metric-detail parity - same two prefs, same two behaviours).
-        fullBleedBackground = showDayCycleBackground && skyBehindCards,
+        fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
         // Start (or stop) a workout right here, not only on Live — mirrors the Live control (#115).
         // Start + Add sit side-by-side as an action row when a strap is bonded (EXP-018 parity).
@@ -283,6 +292,7 @@ fun WorkoutsScreen(vm: AppViewModel) {
             postLogNote?.let { item { PostLogNoteBanner(it) } }
             item { EffortHero(rows = windowRows, effectiveRange = resolved, groups = groups) }
             item { SummarySection(rows = windowRows, effectiveRange = resolved, groups = groups) }
+            item { CalorieHeatmapSection(recentDays) }
             item { BreakdownSection(groups = groups, rows = windowRows) }
             item { ZonesSection(windowRows) }
             if (recoveryTrend.isNotEmpty()) {
@@ -751,6 +761,82 @@ private fun HeroStat(title: String, value: String, tint: Color, modifier: Modifi
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Overline(title)
         Text(value, style = NoopType.number(20f), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+// MARK: - Active-calorie heatmap (last 13 weeks)
+//
+// A GitHub-contribution-style grid of daily active calories: columns = weeks (Monday-first), rows =
+// weekdays, cell shade = that day's burn vs the window max. The bucketing is the pure cross-platform
+// [ActivityHeatmap] (parity with the Swift twin); this composable is just the Compose renderer. Hidden
+// entirely when there's no daily-calorie data yet.
+@Composable
+private fun CalorieHeatmapSection(recentDays: List<com.noop.data.DailyMetric>) {
+    val values = remember(recentDays) {
+        recentDays.mapNotNull { d -> d.activeKcalEst?.let { d.day to it } }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, v) -> v.max() }
+    }
+    val today = remember { java.time.LocalDate.now().toString() }
+    val grid = remember(values, today) { ActivityHeatmap.build(values, today) }
+    if (grid.isEmpty) return
+
+    val amber = Palette.effortColor
+    val inset = Palette.surfaceInset
+    fun colorFor(level: Int): Color = when (level) {
+        0 -> inset
+        1 -> amber.copy(alpha = 0.28f)
+        2 -> amber.copy(alpha = 0.52f)
+        3 -> amber.copy(alpha = 0.78f)
+        else -> amber
+    }
+
+    NoopCard(tint = Palette.effortColor) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Active calories", style = NoopType.title2, color = Palette.textPrimary)
+            Text("Last 13 weeks · daily burn", style = NoopType.footnote, color = Palette.textTertiary)
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val gap = 3.dp
+                val cols = grid.weeks
+                val cell = ((maxWidth - gap * (cols - 1)) / cols).coerceAtLeast(2.dp)
+                Canvas(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(cell * 7 + gap * 6)
+                        .semantics { contentDescription = "Active-calorie heatmap, last 13 weeks" },
+                ) {
+                    val gapPx = gap.toPx()
+                    val cellPx = cell.toPx()
+                    val radius = CornerRadius(cellPx * 0.22f, cellPx * 0.22f)
+                    for (c in 0 until cols) {
+                        val column = grid.columns[c]
+                        for (r in 0 until 7) {
+                            drawRoundRect(
+                                color = colorFor(column[r].level),
+                                topLeft = Offset(c * (cellPx + gapPx), r * (cellPx + gapPx)),
+                                size = Size(cellPx, cellPx),
+                                cornerRadius = radius,
+                            )
+                        }
+                    }
+                }
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("Less", style = NoopType.caption, color = Palette.textTertiary)
+                for (lvl in 0..4) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(colorFor(lvl)),
+                    )
+                }
+                Text("More", style = NoopType.caption, color = Palette.textTertiary)
+            }
+        }
     }
 }
 
@@ -1352,6 +1438,46 @@ private fun WorkoutDetailSheet(vm: AppViewModel, row: WorkoutRow, onDismiss: () 
             }
             steps?.let { DetailRow("Steps", "${grouped(it.toDouble())} steps") }  // #398, on-foot sports
             if (!row.notes.isNullOrBlank()) DetailRow("Notes", row.notes)
+
+            // Export the recorded GPS route as a GPX/FIT file (Strava / Garmin Connect / any GPS app).
+            // Only when a route with a drawable path was recorded; the file is built on-device and shared.
+            row.routePolyline?.let { poly ->
+                val track = remember(poly) { RouteMath.decode(poly) }
+                if (track.size >= 2) {
+                    val exportCtx = LocalContext.current
+                    val exportScope = rememberCoroutineScope()
+                    CardDivider()
+                    Text("Export route", style = NoopType.subhead, color = Palette.textPrimary)
+                    Text(
+                        "Save this GPS route as a file to import into Strava, Garmin Connect, or another app. " +
+                            "Built on your phone — nothing is uploaded until you choose to share it.",
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        NoopButton(
+                            text = "GPX",
+                            kind = NoopButtonKind.Secondary,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                exportScope.launch {
+                                    RouteExportShare.share(exportCtx, RouteExport.Format.GPX, track, row)
+                                }
+                            },
+                        )
+                        NoopButton(
+                            text = "FIT",
+                            kind = NoopButtonKind.Secondary,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                exportScope.launch {
+                                    RouteExportShare.share(exportCtx, RouteExport.Format.FIT, track, row)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
 
             // #796 - per-session Effort contribution. The session's captured strain re-homed from a plain
             // value row into a prominent Effort-amber card (the big count-up value + the "This session"
