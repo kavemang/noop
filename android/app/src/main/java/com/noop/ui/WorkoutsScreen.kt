@@ -1,7 +1,11 @@
 package com.noop.ui
 
 import com.noop.R
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
@@ -791,32 +795,92 @@ private fun CalorieHeatmapSection(recentDays: List<com.noop.data.DailyMetric>) {
         else -> amber
     }
 
+    val months = remember { java.text.DateFormatSymbols().shortMonths }        // localized, index 0 = Jan
+    val weekdays = remember { java.text.DateFormatSymbols().shortWeekdays }     // localized, index 1 = Sun
+    val labelArgb = Palette.textTertiary.toArgb()
     NoopCard(tint = Palette.effortColor) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Active calories", style = NoopType.title2, color = Palette.textPrimary)
             Text("Last 13 weeks · daily burn", style = NoopType.footnote, color = Palette.textTertiary)
+            // Quarter total + current streak (streak reuses the Settings streak plural — no new string;
+            // the "Active calories" title above supplies the kcal unit for the big number).
+            Row(verticalAlignment = Alignment.Bottom) {
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(grouped(grid.total), style = NoopType.title1, color = Palette.textPrimary)
+                    Text("kcal", style = NoopType.caption, color = Palette.textTertiary)  // unit, as elsewhere on this screen
+                }
+                Spacer(Modifier.weight(1f))
+                if (grid.streak > 0) {
+                    Text(
+                        pluralStringResource(R.plurals.settings_streak_run, grid.streak, grid.streak),
+                        style = NoopType.caption,
+                        color = Palette.textTertiary,
+                    )
+                }
+            }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val gap = 3.dp
+                val leftInset = 20.dp   // weekday gutter
+                val topInset = 14.dp    // month row
                 val cols = grid.weeks
-                val cell = ((maxWidth - gap * (cols - 1)) / cols).coerceAtLeast(2.dp)
+                val cell = ((maxWidth - leftInset - gap * (cols - 1)) / cols).coerceAtLeast(2.dp)
                 Canvas(
                     Modifier
                         .fillMaxWidth()
-                        .height(cell * 7 + gap * 6)
+                        .height(cell * 7 + gap * 6 + topInset)
                         .semantics { contentDescription = "Active-calorie heatmap, last 13 weeks" },
                 ) {
                     val gapPx = gap.toPx()
                     val cellPx = cell.toPx()
-                    val radius = CornerRadius(cellPx * 0.22f, cellPx * 0.22f)
+                    val leftPx = leftInset.toPx()
+                    val topPx = topInset.toPx()
+                    val radius = CornerRadius(cellPx * 0.24f, cellPx * 0.24f)
+                    val labelPaint = android.graphics.Paint().apply {
+                        isAntiAlias = true
+                        color = labelArgb
+                        textSize = 10.sp.toPx()
+                    }
+                    val nc = drawContext.canvas.nativeCanvas
+                    // Weekday gutter (Mon/Wed/Fri/Sun). shortWeekdays index 1 = Sun … 7 = Sat; row r is
+                    // Monday-first, so row r → weekday ((1 + r) % 7) + 1. Baseline ≈ row centre.
+                    for (r in 0 until 7 step 2) {
+                        val sym = weekdays.getOrNull(((1 + r) % 7) + 1).orEmpty()
+                        if (sym.isEmpty()) continue
+                        val y = topPx + r * (cellPx + gapPx) + cellPx / 2f + labelPaint.textSize / 3f
+                        nc.drawText(sym, 0f, y, labelPaint)
+                    }
+                    // Month row: label a column when its month changes.
+                    var lastMonth = -1
+                    for (c in 0 until cols) {
+                        val day = grid.columns[c].firstOrNull { it.day != null }?.day ?: continue
+                        val m = day.substring(5, 7).toIntOrNull() ?: continue
+                        if (m != lastMonth) {
+                            lastMonth = m
+                            val sym = months.getOrNull(m - 1).orEmpty()
+                            if (sym.isEmpty()) continue
+                            nc.drawText(sym, leftPx + c * (cellPx + gapPx), labelPaint.textSize, labelPaint)
+                        }
+                    }
+                    // Cells; today's cell gets an outline so "where am I" reads at a glance (mirrors #222).
                     for (c in 0 until cols) {
                         val column = grid.columns[c]
                         for (r in 0 until 7) {
+                            val tl = Offset(leftPx + c * (cellPx + gapPx), topPx + r * (cellPx + gapPx))
                             drawRoundRect(
                                 color = colorFor(column[r].level),
-                                topLeft = Offset(c * (cellPx + gapPx), r * (cellPx + gapPx)),
+                                topLeft = tl,
                                 size = Size(cellPx, cellPx),
                                 cornerRadius = radius,
                             )
+                            if (column[r].day == today) {
+                                drawRoundRect(
+                                    color = Palette.textPrimary,
+                                    topLeft = tl,
+                                    size = Size(cellPx, cellPx),
+                                    cornerRadius = radius,
+                                    style = Stroke(width = 1.5.dp.toPx()),
+                                )
+                            }
                         }
                     }
                 }
@@ -2419,7 +2483,10 @@ internal fun sportIcon(sport: String): ImageVector {
         s.contains("walk") || s.contains("hike") -> Icons.AutoMirrored.Filled.DirectionsWalk
         s.contains("cycl") || s.contains("bike") || s.contains("ride") -> Icons.AutoMirrored.Filled.DirectionsBike
         s.contains("swim") -> Icons.Filled.Pool
-        s.contains("row") -> Icons.Filled.Rowing
+        s.contains("row") || s.contains("kayak") || s.contains("paddle") -> Icons.Filled.Rowing
+        s.contains("surf") || s.contains("sail") || s.contains("scuba") || s.contains("polo") -> Icons.Filled.Pool
+        s.contains("cricket") || s.contains("softball") || s.contains("baseball") -> Icons.Filled.SportsBaseball
+        s.contains("spin") -> Icons.AutoMirrored.Filled.DirectionsBike
         s.contains("yoga") || s.contains("pilates") || s.contains("meditat") || s.contains("stretch") -> Icons.Filled.SelfImprovement
         s.contains("strength") || s.contains("weight") || s.contains("lift") -> Icons.Filled.FitnessCenter
         s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") -> Icons.Filled.SportsMartialArts
