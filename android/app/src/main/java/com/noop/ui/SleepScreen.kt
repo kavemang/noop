@@ -719,6 +719,7 @@ fun SleepScreen(
                 napBlocks = night?.napBlocks ?: emptyList(),
                 habitualMidsleepSec = habitualMidsleep,
                 motionEpochs = night?.groupMotion ?: emptyList(),
+                groupStages = night?.groupStages,
                 groupInBedMin = night?.groupInBedMin,
                 windowOnsetTs = night?.heroOnsetTs,
                 windowWakeTs = night?.heroWakeTs,
@@ -792,7 +793,7 @@ fun SleepScreen(
                     SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
                         Column {
                             Spacer(Modifier.height(Metrics.selectorTopUp))
-                            SleepConsistencyCard(sleeps, habitualMidsleep)
+                            SleepConsistencyCard(sleeps, habitualMidsleep, tilesModel.consistency.latest)
                         }
                     }
                 }
@@ -1114,6 +1115,11 @@ private fun Hero(
     // Per-epoch MOTION for the main-night GROUP (#407), laid in group order by `selectNight`. Empty → honest
     // empty state. Drawn UNDER the hypnogram on the same timeline. Mirrors iOS SleepView.Night.motionEpochs.
     motionEpochs: List<Double> = emptyList(),
+    // The bridged main-night GROUP's summed DECODED stage minutes (`sumGroupStages`, gaps excluded) —
+    // the byte-for-byte twin of iOS `night.stages.total`, used for the Naps card's "Main sleep". Null
+    // for single-block days → the session's own decoded stages below. NOT `display.stages`, whose awake
+    // is efficiency-derived and only approximates the decoded total.
+    groupStages: StageMins? = null,
     // Whole-group time-in-bed minutes for a fragmented night (#561): Σ fragment windows, gaps
     // excluded, computed by `selectNight`. Null for single-block days → the session-window /
     // stage-total fallbacks below apply unchanged.
@@ -1251,8 +1257,20 @@ private fun Hero(
         // with the SAME mechanism main sleep uses, plus a Main / Nap(s) / Total split so what drives the
         // day's Rest total is explainable. Mirrors iOS SleepView.napSection.
         if (session != null) {
+            // Main = the WHOLE main-night's summed DECODED stage minutes (awake+light+deep+rem), NOT the
+            // winning fragment's window — a biphasic/bridged night has sibling fragments that are part of
+            // the main sleep, not naps, and the old single-block window undercounted the Main / Total
+            // split on a fragmented night. Byte-for-byte twin of iOS SleepView.napSection (`night.stages
+            // .total`): the bridged group's `sumGroupStages` (gaps excluded, mirrors iOS mergeDay), or the
+            // single block's own decoded stages, both clamped to onset. NOT `display.stages`, whose awake
+            // is efficiency-derived. Window fallback only for a stage-less stub day, unchanged from before.
+            val mainStages = groupStages
+                ?: parseSessionStages(SleepStageTotals.clampStagesToOnset(session.stagesJSON, session.effectiveStartTs))
+            val mainMin = mainStages?.let { it.awake + it.light + it.deep + it.rem }
+                ?: (session.endTs - session.effectiveStartTs) / 60.0
             NapsCard(
                 main = session,
+                mainMin = mainMin,
                 naps = napBlocks,
                 onEditNapTimes = onUpdateTimes,
                 onDeleteNap = onDeleteSession,
@@ -1274,6 +1292,10 @@ private fun Hero(
 @Composable
 private fun NapsCard(
     main: SleepSession,
+    // The day's MAIN-sleep minutes = the whole main-night's summed DECODED stage minutes (iOS
+    // `night.stages.total`): the bridged group's `sumGroupStages` or the single block's own decoded
+    // stages. Computed by the caller. NOT `main`'s own window — that undercounts a bridged night.
+    mainMin: Double,
     naps: List<SleepSession>,
     onEditNapTimes: (SleepSession, Long, Long) -> Unit,
     onDeleteNap: (SleepSession) -> Unit,
@@ -1283,7 +1305,6 @@ private fun NapsCard(
     // Active strap is an Oura ring → a computed night's provenance reads "Oura" not "On-device" (C4).
     activeIsOura: Boolean = false,
 ) {
-    val mainMin = (main.endTs - main.effectiveStartTs) / 60.0
     val napMin = naps.sumOf { (it.endTs - it.effectiveStartTs) / 60.0 }
     NoopCard(padding = Metrics.space14, tint = Palette.restColor) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
@@ -3195,6 +3216,60 @@ private fun LegendDot(label: String, color: Color) {
     }
 }
 
+// MARK: - Consistency host card (#today-hosted-cards)
+
+/**
+ * A SIMPLE standalone "Consistency" score card for the Today host — mirrors the [HoursVsNeededCard]
+ * presentation (a NoopCard header with a trend arrow + big % + a sparkline), NOT the rich scatter
+ * [SleepConsistencyCard] (which needs raw sessions). Renders `m.consistency` (latest / typical / series) —
+ * the SAME shared SleepModel metric the Sleep tab's Night-detail tile reads (bedtime-onset spread, honouring
+ * the imported-consistency preference, byte-identical to iOS `SleepModel.consistency`), so the number and the
+ * sparkline can never diverge between the two surfaces.
+ */
+@Composable
+internal fun ConsistencyHostCard(m: SleepModel) {
+    val cons = m.consistency
+    // Uncapped % (consistency is already 0–100); "—" when there is no latest night yet.
+    val latest = cons.latest
+    // Trend arrow off the last two nights of the consistency series (same idiom as HoursVsNeededCard).
+    val trendArrow = if (cons.series.size >= 2) {
+        val delta = cons.series.last() - cons.series[cons.series.lastIndex - 1]
+        when {
+            delta > 0.5 -> "↑"
+            delta < -0.5 -> "↓"
+            else -> "→"
+        }
+    } else "→"
+    val arrowColor = when (trendArrow) {
+        "↑" -> Palette.statusPositive
+        "↓" -> Palette.statusCritical
+        else -> Palette.textTertiary
+    }
+    // The simple host card summarizes the trend via the arrow + sparkline rather than a "vs typical"
+    // caption (mirrors the Android HoursVsNeeded host presentation, which carries no caption literal).
+    NoopCard(padding = Metrics.cardPadding, tint = Palette.restColor) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space14)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Overline("Sleep")
+                    Text(uiString(R.string.l10n_sleep_screen_consistency_0ea7b95e), style = NoopType.headline, color = Palette.textPrimary)
+                }
+                Text(trendArrow, style = NoopType.title2, color = arrowColor)
+                Spacer(Modifier.width(Metrics.space6))
+                Text(
+                    if (latest != null) uiString(R.string.l10n_sleep_screen_score_roundtoint_a2d1cc99, latest.roundToInt()) else "—",
+                    style = NoopType.chartValue,
+                    color = Palette.restColor,
+                )
+            }
+            // Sparkline of the consistency history, in metricCyan to match the Sleep-tab Night-detail tile.
+            if (cons.series.size > 1) {
+                Sparkline(values = cons.series.takeLast(30), color = Palette.metricCyan)
+            }
+        }
+    }
+}
+
 // MARK: - Sleep Consistency card
 
 /** One night's bed/wake fold for [SleepConsistencyCard], memoized off `sleeps` (#perf). */
@@ -3207,7 +3282,14 @@ private data class SleepNightTiming(val label: String, val bedHour: Float, val w
  * of the personal typical. (PR #260)
  */
 @Composable
-internal fun SleepConsistencyCard(sleeps: List<SleepSession>, habitualMidsleepSec: Long? = null) {
+internal fun SleepConsistencyCard(
+    sleeps: List<SleepSession>,
+    habitualMidsleepSec: Long? = null,
+    // #sleep-consistency-parity: the iOS-canonical onset-spread score (model.consistency, which also
+    // honours the imported-consistency preference). Passed in so the card headline matches iOS + the tile
+    // instead of the old local "share of nights within 45 min" count (a third, divergent value).
+    consistencyScore: Double? = null,
+) {
     // #perf: building the per-night fold allocates 2 Calendars + a SimpleDateFormat per session (~28
     // objects for 14 nights). It's a pure derivation of `sleeps` (no wall-clock input), so memoize it on
     // `sleeps` — scrolling the Sleep screen then reuses it instead of rebuilding it every recompose frame.
@@ -3235,12 +3317,10 @@ internal fun SleepConsistencyCard(sleeps: List<SleepSession>, habitualMidsleepSe
     val wakeSdH = sd(timings.map { it.wakeHour })
     val typicalBed = timings.map { it.bedHour }.average().toFloat()
     val typicalWake = timings.map { it.wakeHour }.average().toFloat()
-    // Count nights where bed AND wake are within 45 min of the typical.
-    val threshold = 0.75f
-    val consistentNights = timings.count { t ->
-        abs(t.bedHour - typicalBed) <= threshold && abs(t.wakeHour - typicalWake) <= threshold
-    }
-    val consistencyPct = (consistentNights.toFloat() / timings.size * 100f).coerceIn(0f, 100f)
+    // #sleep-consistency-parity: the headline is the shared onset-spread score (iOS-canonical), not the
+    // old "share of nights within 45 min of typical" count. The bed/wake scatter + SD labels below are
+    // unchanged (they visualise the same onsets). Falls back to 0 only when the score is unavailable.
+    val consistencyPct = consistencyScore?.toFloat()?.coerceIn(0f, 100f) ?: 0f
     val typicalBedLabel = run {
         val h = ((typicalBed + 24f) % 24f).toInt()
         String.format(Locale.US, "%02d:00", h)
