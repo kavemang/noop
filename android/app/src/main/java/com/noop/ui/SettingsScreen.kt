@@ -119,6 +119,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.BuildConfig
 import com.noop.analytics.Baselines
+import com.noop.analytics.HrZoneSet
+import com.noop.analytics.HrZones
 import com.noop.analytics.Zones
 import com.noop.R
 import com.noop.ble.PuffinExperiment
@@ -283,6 +285,47 @@ class ProfileStore(private val prefs: SharedPreferences) {
     /** Effective HR-max: the manual override if set, else the Tanaka estimate. */
     val hrMax: Int get() = if (hrMaxOverride > 0) hrMaxOverride else hrMaxAuto
 
+    /**
+     * Five personalized inclusive zone starts in BPM, or null for the conventional %HRmax zones.
+     * Persisted under [KEY_HR_ZONE_THRESHOLDS]; a stored value failing the shared invariant is treated
+     * as absent. Mirrors macOS `Profile.hrZoneThresholds`.
+     */
+    var hrZoneThresholds: List<Int>?
+        get() {
+            val values = prefs.getString(KEY_HR_ZONE_THRESHOLDS, null)
+                ?.split(",")?.mapNotNull(String::toIntOrNull) ?: return null
+            return values.takeIf { validZoneThresholds(it) }
+        }
+        set(values) {
+            if (values == null || !validZoneThresholds(values)) {
+                prefs.edit().remove(KEY_HR_ZONE_THRESHOLDS).apply()
+            } else {
+                prefs.edit().putString(KEY_HR_ZONE_THRESHOLDS, values.joinToString(",")).apply()
+            }
+        }
+
+    /** The single display-zone model used by live HR, workout splits, and haptic coaching. */
+    val hrZoneSet: HrZoneSet
+        get() = HrZones.zones(maxHR = hrMax.toDouble(), customLowerBounds = hrZoneThresholds?.map(Int::toDouble))
+
+    val hasCustomHrZones: Boolean get() = hrZoneThresholds != null
+
+    /** Enable by seeding the editor with conventional boundaries; disabling restores the defaults. */
+    fun setCustomHrZonesEnabled(enabled: Boolean) {
+        hrZoneThresholds = if (enabled) HrZones.defaultLowerBounds(hrMax.toDouble()) else null
+    }
+
+    /** Move one boundary while preserving strict ordering, with neighbour-aware clamps. */
+    fun stepHrZoneThreshold(index: Int, up: Boolean) {
+        val current = hrZoneThresholds?.toMutableList() ?: return
+        if (index !in current.indices) return
+        val floor = if (index == 0) HrZones.customBPMRange.first else current[index - 1] + 1
+        val ceiling = if (index == current.lastIndex) HrZones.customBPMRange.last else current[index + 1] - 1
+        if (floor > ceiling) return   // no room between neighbours -> no-op (coerceIn throws on empty range)
+        current[index] = (current[index] + if (up) 1 else -1).coerceIn(floor, ceiling)
+        hrZoneThresholds = current
+    }
+
     // ── Backup settings snapshot/apply (#1000) ──────────────────────────────────────────────────
     // The profile half of a `.noopbak`'s `settings.json`. Canonical key strings mirror
     // `BackupSettingsCodec.WHITELIST` (and the Apple `BackupSettings.whitelist`) exactly — note
@@ -302,6 +345,9 @@ class ProfileStore(private val prefs: SharedPreferences) {
         if (prefs.contains(KEY_HEIGHT)) out["profile.heightCm"] = heightCm
         if (prefs.contains(KEY_WAIST)) out["profile.waistCm"] = waistCm
         if (prefs.contains(KEY_HRMAX)) out["profile.hrMax"] = hrMaxOverride
+        if (prefs.contains(KEY_HR_ZONE_THRESHOLDS)) {
+            hrZoneThresholds?.let { out["profile.hrZoneThresholds"] = it.joinToString(",") }
+        }
         return out
     }
 
@@ -320,6 +366,9 @@ class ProfileStore(private val prefs: SharedPreferences) {
         (values["profile.heightCm"] as? Number)?.let { heightCm = it.toDouble() }
         (values["profile.waistCm"] as? Number)?.let { waistCm = it.toDouble() }
         (values["profile.hrMax"] as? Number)?.let { hrMaxOverride = it.toInt() }
+        (values["profile.hrZoneThresholds"] as? String)?.let {
+            hrZoneThresholds = it.split(",").mapNotNull(String::toIntOrNull)
+        }
     }
 
     companion object {
@@ -334,6 +383,13 @@ class ProfileStore(private val prefs: SharedPreferences) {
         private const val KEY_HEIGHT = "height_cm"
         private const val KEY_WAIST = "waist_cm"
         private const val KEY_HRMAX = "hr_max_override"
+        private const val KEY_HR_ZONE_THRESHOLDS = "hr_zone_thresholds"
+
+        /** The shared five-boundary invariant (parity with `HRZones.validCustomLowerBounds`). */
+        fun validZoneThresholds(values: List<Int>): Boolean =
+            values.size == 5 &&
+                values.all { it in HrZones.customBPMRange } &&
+                values.zipWithNext().all { (a, b) -> a < b }
         private const val KEY_STEP_SCALE = "step_ticks_per_step"
         private const val KEY_STEPS_COEFF = "steps_calibration_coefficient"
         private const val KEY_STEPS_SAMPLE_DAYS = "steps_calibration_sample_days"
@@ -957,6 +1013,42 @@ fun SettingsScreen(
                             style = NoopType.footnote,
                             color = if (profile.hrMaxOverride > 0) Palette.accent else Palette.textTertiary,
                         )
+                    }
+                }
+                SettingsRowDivider()
+                // Custom HR zones (#531, @kavemang): five personalized inclusive BPM lower bounds that
+                // replace the conventional %HRmax bands. Off -> the effective set stays conventional.
+                SettingsFormRow(label = uiString(R.string.l10n_settings_screen_custom_hr_zones_84736ca5)) {
+                    Switch(
+                        checked = profile.hasCustomHrZones,
+                        onCheckedChange = { mutate { profile.setCustomHrZonesEnabled(it) } },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Palette.surfaceBase,
+                            checkedTrackColor = Palette.accent,
+                            uncheckedThumbColor = Palette.textSecondary,
+                            uncheckedTrackColor = Palette.surfaceInset,
+                            uncheckedBorderColor = Palette.hairline,
+                        ),
+                    )
+                }
+                if (profile.hasCustomHrZones) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = uiString(R.string.l10n_settings_screen_custom_hr_zones_hint_f7fa3bae),
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                    profile.hrZoneThresholds?.forEachIndexed { index, value ->
+                        SettingsRowDivider()
+                        SettingsFormRow(label = uiString(R.string.l10n_settings_screen_zone_starts_a0a60d45, index + 1)) {
+                            StepperField(
+                                value = value.toString(),
+                                unit = "bpm",
+                                accessibility = "Zone ${index + 1} starts at $value bpm",
+                                onMinus = { mutate { profile.stepHrZoneThreshold(index, up = false) } },
+                                onPlus = { mutate { profile.stepHrZoneThreshold(index, up = true) } },
+                            )
+                        }
                     }
                 }
                 SettingsRowDivider()
