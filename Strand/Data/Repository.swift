@@ -1182,7 +1182,7 @@ final class Repository: ObservableObject {
 
     /// The user's learned habitual midsleep (local time-of-day seconds), or nil under
     /// `SleepStageTotals.habitualMinDays` of history (cold-start). Computed EXACTLY as
-    /// `IntelligenceEngine.computeHabitualMidsleep` does , the SAME raw imported + computed ("-noop")
+    /// `IntelligenceEngine.computeHabitualSleep` does , the SAME raw imported + computed ("-noop")
     /// sleep-session union, one `HistoryBlock` per session (effective bounds, dayKey = the LOCAL calendar
     /// day of the midpoint), deferring to the SAME shared `SleepStageTotals.habitualMidsleepSec` pure
     /// function , so the Sleep tab's main-night pick aligns to the same value the analytics rollup used.
@@ -2892,7 +2892,8 @@ private extension DailyMetric {
             // Raw SpO2 is on-device only (imports never carry it), so the imported row's nil is
             // backfilled from the computed fallback — otherwise the nightly means would be lost. (#93)
             spo2Red: spo2Red ?? fallback.spo2Red,
-            spo2Ir: spo2Ir ?? fallback.spo2Ir
+            spo2Ir: spo2Ir ?? fallback.spo2Ir,
+            avgSdnn: avgSdnn ?? fallback.avgSdnn
         )
     }
 
@@ -2920,7 +2921,8 @@ private extension DailyMetric {
             steps: steps,
             activeKcalEst: activeKcalEst,
             spo2Red: spo2Red,   // non-sleep field: preserved as-is (#93)
-            spo2Ir: spo2Ir
+            spo2Ir: spo2Ir,
+            avgSdnn: avgSdnn    // non-sleep (HRV) field: preserved as-is
         )
     }
 }

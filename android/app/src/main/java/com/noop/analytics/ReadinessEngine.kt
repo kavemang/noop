@@ -2,6 +2,8 @@ package com.noop.analytics
 
 import com.noop.data.DailyMetric
 import java.util.Locale
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.sqrt
 
 /**
@@ -62,6 +64,12 @@ object ReadinessEngine {
         val acwr: Double?,
         /** Foster training monotony over the last week (null if not enough strain history). */
         val monotony: Double?,
+        /**
+         * How much history backs this read (HRV/RHR baseline density) — so the card can show
+         * calibrating / building / solid instead of a confident number off a 7-night baseline.
+         * Defaults to CALIBRATING to match Swift's default init parameter.
+         */
+        val confidence: ScoreConfidence = ScoreConfidence.CALIBRATING,
     )
 
     // MARK: Tunables (named so the thresholds are auditable)
@@ -168,6 +176,8 @@ object ReadinessEngine {
             key = "hrv", label = "HRV",
             unit = "ms", decimals = 0,
             higherIsBetter = true,
+            cfg = Baselines.readinessHRVLnCfg,   // RD2: ln-space spine, reject off
+            logDomain = true,   // RD1: lnRMSSD — HRV is right-skewed
             goodText = "above your baseline - well recovered",
             neutralText = "in your normal range",
             watchText = "a touch below baseline",
@@ -182,6 +192,7 @@ object ReadinessEngine {
             key = "rhr", label = "Resting HR",
             unit = "bpm", decimals = 0,
             higherIsBetter = false,
+            cfg = Baselines.restingHRCfg,   // RD2: raw-bpm spine, reject off
             goodText = "at or below baseline",
             neutralText = "in your normal range",
             watchText = "running a little high",
@@ -258,9 +269,19 @@ object ReadinessEngine {
             signals = signals,
             hasHistory = history.isNotEmpty() || acwr != null,
         )
+        // RD-confidence: surface how much history backs the read (HRV baseline density, the primary
+        // readiness driver). A read off a 7-night baseline must not look as certain as one off the full
+        // 30-night window. Insufficient reads carry CALIBRATING.
+        val hrvBaselineNights = history.takeLast(baselineWindow).mapNotNull { it.avgHrv }.count()
+        val confidence = ScoreConfidence.readiness(
+            hasRead = level != Level.INSUFFICIENT,
+            baselineNights = hrvBaselineNights,
+            fullWindow = baselineWindow,
+        )
         return Readiness(
             level = level, headline = headline, summary = summary,
             signals = signals, acwr = acwr, monotony = monotony,
+            confidence = confidence,
         )
     }
 
@@ -270,15 +291,35 @@ object ReadinessEngine {
     private fun zSignal(
         value: Double?, baseline: List<Double>,
         key: String, label: String, unit: String, decimals: Int, higherIsBetter: Boolean,
+        cfg: MetricCfg,
+        logDomain: Boolean = false,
         goodText: String, neutralText: String,
         watchText: String, badText: String,
     ): Signal? {
         if (value == null || baseline.size < minBaseline) return null
-        val m = mean(baseline) ?: return null
-        val sd = sampleSD(baseline) ?: return null
-        if (sd <= 0) return null
+        // RD1: right-skewed metrics (HRV/RMSSD) are z-scored in the LOG domain — lnRMSSD is closer to
+        // normal, so a symmetric z is statistically valid, whereas a raw-ms z over-weights the long
+        // upper tail and misstates tail rarity (Plews/Altini; the app's own HRVReadiness works this
+        // way). RHR/resp are ~normal and stay linear. Evidence stays in the metric's own units, but the
+        // baseline shown is then the GEOMETRIC mean (exp of the log-mean) — a typical night, not an
+        // outlier-inflated arithmetic mean.
+        val tv = if (logDomain) ln(maxOf(value, 1.0)) else value
+        val tb = if (logDomain) baseline.map { ln(maxOf(it, 1.0)) } else baseline
+        // RD2: fold the trailing baseline through the shared Winsorized-EWMA spine — recency-weighted,
+        // σ-floored (a tight baseline can't saturate the z), and Winsor-clamped so a single freak night
+        // is DAMPED not folded raw — instead of a flat mean + sample SD. Hard-outlier REJECTION is off
+        // (`rejectHardOutliers = false`): a re-folded trailing window must ADAPT to a recent sustained
+        // shift (fitness change / device swap) rather than reject the new normal as a run of outliers —
+        // the window-fold vs incremental-fold distinction, validated on real HRV history. `cfg` is in
+        // the SAME space as `tb` (ln for HRV, linear for RHR); center + spread come back σ-floored.
+        // Mirrors Swift ReadinessEngine.zSignal.
+        val state = Baselines.foldHistory(tb, cfg, rejectHardOutliers = false)
+        if (!state.usable) return null
+        val sigma = maxOf(1.253 * state.spread, 1e-9)   // robust σ from the EWMA-abs-dev spread
+        if (sigma <= 0) return null
+        val m = state.baseline
         // Orient z so positive always means "better".
-        val z = (if (higherIsBetter) (value - m) else (m - value)) / sd
+        val z = (if (higherIsBetter) (tv - m) else (m - tv)) / sigma
         val flag: Flag
         val text: String
         when {
@@ -287,8 +328,10 @@ object ReadinessEngine {
             z >= -1.0 -> { flag = Flag.WATCH; text = watchText }
             else -> { flag = Flag.BAD; text = badText }
         }
-        // The numbers behind the read: today's value vs the baseline mean, in the metric's units.
-        val evidence = "${fmt(value, decimals)} vs ${fmt(m, decimals)} $unit"
+        // The numbers behind the read: today's value vs the baseline mean, in the metric's units. In the
+        // log domain the baseline shown is the geometric mean (exp of the log-mean), not arithmetic.
+        val baselineShown = if (logDomain) exp(m) else m
+        val evidence = "${fmt(value, decimals)} vs ${fmt(baselineShown, decimals)} $unit"
         return Signal(key = key, label = label, detail = text, flag = flag, evidence = evidence)
     }
 
