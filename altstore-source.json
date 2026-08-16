@@ -23,7 +23,7 @@
           "date": "2026-08-16",
           "localizedDescription": "NOOP 10.1.0. See the release notes for what changed.",
           "downloadURL": "https://github.com/kavemang/noop/releases/download/v10.1.0/NOOP-ios-unsigned-v10.1.0.ipa",
-          "size": 27895933,
+          "size": 27897184,
           "minOSVersion": "17.0"
         },
         {
@@ -1383,7 +1383,7 @@
       "versionDate": "2026-08-16",
       "versionDescription": "NOOP 10.1.0. See the release notes for what changed.",
       "downloadURL": "https://github.com/kavemang/noop/releases/download/v10.1.0/NOOP-ios-unsigned-v10.1.0.ipa",
-      "size": 27895933,
+      "size": 27897184,
       "minOSVersion": "17.0"
     }
   ],
