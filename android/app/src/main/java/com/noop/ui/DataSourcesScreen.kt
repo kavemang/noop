@@ -150,9 +150,14 @@ fun DataSourcesScreen(vm: AppViewModel) {
     // reads per screen visit. Workout counts are now exact (the row read was capped at DEFAULT_LIMIT).
     suspend fun refreshCounts() {
         val nowS = System.currentTimeMillis() / 1000
-        whoopDays = vm.repo.daysCount("my-whoop")
-        whoopWorkouts = vm.repo.workoutsCount("my-whoop", 0L, nowS)
-        whoopHasHr = vm.repo.latestHrSampleTs("my-whoop") != null
+        // #1304/#512: count across the active-strap UNION (active ∪ canonical), so a 2nd strap's data
+        // under "whoop-<uuid>" is included instead of silently under-reported. `daysMerged` is the exact
+        // twin of Swift's `repo.days` (mergeActivityFileSteps(mergeDaily(imported, computed))) — so this
+        // matches the iOS badge count, including a strap-only user's computed-only ("-noop") days that an
+        // imported-only count would miss. workoutsUnion mirrors Swift's dataVolumeSnapshot workout union.
+        whoopDays = vm.repo.daysMerged(vm.activeStrapId).size
+        whoopWorkouts = vm.repo.workoutsUnion(vm.activeStrapId, 0L, nowS).size
+        whoopHasHr = vm.repo.latestHrSampleTsUnion(vm.activeStrapId) != null
         appleDays = vm.repo.appleDailyCount("apple-health", "0000-01-01", "9999-12-31")
         appleWorkouts = vm.repo.workoutsCount("apple-health", 0L, nowS)
         hcDays = vm.repo.appleDailyCount("health-connect", "0000-01-01", "9999-12-31")
@@ -736,7 +741,8 @@ fun DataSourcesScreen(vm: AppViewModel) {
             subtitle = "Re-share your live strap heart rate over Bluetooth as a standard heart-rate " +
                 "sensor, so a gym treadmill, bike, Zwift, Peloton or any fitness app nearby can read " +
                 "it. Works on any WHOOP (4.0 or 5.0/MG) because your phone does the broadcasting. " +
-                "Local Bluetooth only. Nothing leaves your phone. Off by default.",
+                "If your strap or watch already broadcasts heart rate directly to another device, " +
+                "you can leave this off. Local Bluetooth only. Nothing leaves your phone. Off by default.",
         ) {
             if (hrBroadcast) {
                 val (label, tone) =
@@ -810,9 +816,7 @@ fun DataSourcesScreen(vm: AppViewModel) {
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
-                        uiString(R.string.l10n_data_sources_screen_broadcast_hr_is_on_your_strap_0ad5368a) +
-                            "which keeps its radio hot and drains the battery faster. Turn it off when " +
-                            "you're not using it with another device.",
+                        uiString(R.string.l10n_data_sources_screen_broadcast_hr_is_on_your_strap_0ad5368a),
                         style = NoopType.caption,
                         color = Palette.statusWarning,
                     )

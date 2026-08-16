@@ -485,6 +485,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Cycle awareness (v5 skin-temp suite) — OPT-IN, default OFF (manual-first). Declared BEFORE init for
     // the same reason as _illnessWatchEnabled: the recentDays collector reads it on its synchronous first
     // (cached) emission. Gates whether CyclePhaseEngine actually classifies in the v5 analytics pass.
+    private val _cycleAwarenessHidden = MutableStateFlow(NoopPrefs.cycleAwarenessHidden(appContext))
+    /** #hide-cycle: the user's "not for me" opt-out (never age-based). Twin of iOS AppModel.cycleAwarenessHidden. */
+    val cycleAwarenessHidden: StateFlow<Boolean> = _cycleAwarenessHidden.asStateFlow()
+
     private val _cycleTrackingEnabled = MutableStateFlow(NoopPrefs.cycleTracking(appContext))
     /** Whether cycle-phase awareness is enabled (reads a coarse phase from nightly skin temperature). */
     val cycleTrackingEnabled: StateFlow<Boolean> = _cycleTrackingEnabled.asStateFlow()
@@ -2045,6 +2049,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         ble.debugLogcat = enabled
     }
 
+    /** #polar-debug: toggle the Polar strap-identity diagnostic. Read live at connect by the strap source
+     *  (via [SourceCoordinator]); no restart needed. Diagnostic-only — nothing gates behaviour on it. */
+    fun setPolarDebugLogging(enabled: Boolean) {
+        NoopPrefs.setPolarDebugLogging(appContext, enabled)
+    }
+
     /** #1121: toggle the opt-in rolling "detailed capture" strap-log file. Persisted so it survives a
      *  process kill (re-armed in [init] below). */
     fun setDetailedCapture(enabled: Boolean) {
@@ -2355,6 +2365,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         NoopPrefs.setIllnessWatch(appContext, enabled)
         // Recompute now — the recentDays collector only fires on data changes.
         _healthAlert.value = if (enabled) IllnessWatch.evaluate(recentDays.value) else null
+    }
+
+    /** #hide-cycle: hide/show the cycle-awareness offer. Hiding also stops active tracking, so "hidden"
+     *  means fully gone; showing re-offers it. Reversible. Twin of the iOS Automations master toggle. */
+    fun setCycleAwarenessHidden(hidden: Boolean) {
+        _cycleAwarenessHidden.value = hidden
+        NoopPrefs.setCycleAwarenessHidden(appContext, hidden)
+        if (hidden && _cycleTrackingEnabled.value) setCycleTrackingEnabled(false)
     }
 
     /** Flip cycle awareness (v5 skin-temp suite). Persists and recomputes the v5 signals immediately so
