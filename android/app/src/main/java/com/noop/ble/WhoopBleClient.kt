@@ -128,6 +128,10 @@ data class LiveState(
     val streamingLiveHR: Boolean = false,
     val heartRate: Int? = null,
     val rr: List<Int> = emptyList(),
+    /** Monotonic count of R-R packet arrivals, bumped by every [withRRIntervals] call. Consume
+     *  packets via `Flow<LiveState>.rrPackets()` (keyed on this), never by watching [rr] — see
+     *  LiveRrPackets.kt. Twin of macOS LiveState.rrSeq. */
+    val rrSeq: Long = 0,
     /** Rolling UI buffer of recent R-R intervals (capped, oldest dropped first). The standard BLE HR
      *  notification usually carries only one or two intervals per packet, so the Live console needs a
      *  short history to render a moving R-R strip / rolling RMSSD. Appended (never replaced) via
@@ -228,10 +232,10 @@ data class LiveState(
      *  Twin of macOS LiveState.setRRIntervals (PR#191). */
     fun withRRIntervals(intervals: List<Int>, recentLimit: Int = 60): LiveState {
         val valid = intervals.filter { it > 0 }
-        if (valid.isEmpty()) return copy(rr = intervals)
+        if (valid.isEmpty()) return copy(rr = intervals, rrSeq = rrSeq + 1)
         val merged = rrRecent + valid
         val capped = if (merged.size > recentLimit) merged.takeLast(recentLimit) else merged
-        return copy(rr = intervals, rrRecent = capped)
+        return copy(rr = intervals, rrSeq = rrSeq + 1, rrRecent = capped)
     }
 
     /** Blank all live biometric readouts (HR + R-R + the rolling buffer) so a stale heart rate or R-R
@@ -5992,12 +5996,14 @@ class WhoopBleClient(
         // of the way — in particular we must NOT bounce, which would abandon the offload mid-session
         // and break the safe-trim cursor.
         if (!backfilling) {
-            // #580: a known history-empty 5/MG (firmware serves no offload) gets a far longer fuse. Live HR
-            // over the standard 0x2A37 profile keeps the link genuinely alive, but its packets can lull for
-            // >120s when the strap is off-wrist / resting, and an empty offload leaves the data channel
-            // quiet — so the old 120s rule disconnected/rescanned a perfectly healthy link every ~2 min (the
-            // thrash this fixes). A WHOOP 4 (real "not recording" path) keeps the tight 120s fuse.
-            val bounceFuse = if (connectedFamily == DeviceFamily.WHOOP5 && whoop5EmptyOffload.historyEmpty)
+            // #580 / #1414: live HR over the standard 0x2A37 profile keeps the link genuinely alive, but its
+            // packets can lull for >120s when the wearer is at rest / off-wrist, so the old 120s rule
+            // disconnected/rescanned a perfectly healthy 5/MG link every ~2 min (the thrash #580 fixed). That
+            // lull is a FAMILY trait of the 5/MG HR profile, independent of whether history offload serves
+            // data — #580 mistakenly gated the wide fuse on `historyEmpty`, so a 5/MG that DID serve history
+            // still thrashed on the 120s fuse (#1414). Widen to the whole 5/MG family; WHOOP 4 keeps 120s.
+            // (`historyEmpty` still gates the battery-backfill interval — a separate concern, left as-is.)
+            val bounceFuse = if (connectedFamily == DeviceFamily.WHOOP5)
                 KEEPALIVE_STALL_5MG_EMPTY_MS else KEEPALIVE_STALL_MS
             if (silentMs > bounceFuse) {
                 // Nothing for the fuse window — the live stream/link stalled. Bounce it: the auto-rescan on
