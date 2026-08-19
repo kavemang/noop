@@ -363,9 +363,18 @@ public enum HRVAnalyzer {
             if stepSec > 0, let last = lastEmitTs, edgeTs - last < stepSec { continue }
             // Clean the window's raw R-R values with the shared range + Malik ectopic pipeline, then
             // require enough survivors before trusting a windowed rMSSD.
+            //
+            // #1448: GAP-AWARE, exactly as the nightly `analyze` above already is. Dropping a beat joins
+            // two intervals that were never adjacent, and their difference is a splice rather than a
+            // physiological delta — the spurious large delta this analyzer's gap-aware pair (#204/#195)
+            // exists to exclude. `cleaned.nn` is byte-identical to `cleanRR` over the same input, so the
+            // survivor gate is unchanged, and `rmssdGapAware` equals `rmssdRaw` on a window with no gaps:
+            // only windows that actually lost a beat move. A window whose survivors share NO adjacent
+            // pair now emits nothing rather than a number built entirely from splices.
             let windowRaw = sorted[left...right].map { Double($0.rrMs) }
-            let clean = cleanRR(windowRaw)
-            guard clean.count >= minBeatsPerWindow, let r = rmssdRaw(clean) else { continue }
+            let cleaned = cleanRRGapAware(windowRaw)
+            guard cleaned.nn.count >= minBeatsPerWindow,
+                  let r = rmssdGapAware(cleaned.nn, cleaned.contiguous) else { continue }
             out.append(RollingRmssdPoint(ts: edgeTs, rmssd: r))
             lastEmitTs = edgeTs
         }
@@ -658,6 +667,7 @@ public enum HRVAnalyzer {
         tsSec: [Int],
         rrMs: [Double],
         srcCodes: [Int?],
+        ords: [Int?] = [],
         halfWindowSec: Int = 3,
         maxRowsPerSecond: Int = 24
     ) -> String {
@@ -698,6 +708,12 @@ public enum HRVAnalyzer {
                 let idx = rows[k]
                 out += "\(Int(rrMs[idx] + 0.5))"
                 if idx < srcCodes.count, let c = srcCodes[idx] { out += "@\(c)" }
+                // #1008: `ord` is the per-TIMESTAMP occurrence counter the store assigned when the row
+                // was written, so it restarts at 0 for every delivery. A second delivered ONCE therefore
+                // reads 0,1,2,…; a second built across two offloads reads 0,1,2,0,1 — the repeat is the
+                // tell. This is the only field that can answer it for a strap: WHOOP's wire format has
+                // no channel marker, so `srcChannel` is always nil on a WHOOP row.
+                if idx < ords.count, let o = ords[idx] { out += "#\(o)" }
             }
             if rows.count > shown { out += ",+\(rows.count - shown)" }
             out += "]"
