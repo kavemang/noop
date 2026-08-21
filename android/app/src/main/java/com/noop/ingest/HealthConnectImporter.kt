@@ -186,6 +186,34 @@ object HealthConnectImporter {
             .apply()
     }
 
+    /**
+     * The categories implied by grants Android already holds.
+     *
+     * A user who granted Health Connect before #645 existed has no stored selection, and — if they
+     * onboarded before #949 added it — no permission signature either. The importer has shipped since
+     * 2026-06-07 and that key only since 2026-07-30, so there is a real cohort with neither. Falling back
+     * to [DEFAULT_CATEGORIES] for them would silently stop importing Activity and Body composition while
+     * Android still shows those permissions as granted: nothing on screen would say why steps stopped.
+     *
+     * Their grants are the honest record of what they agreed to, so read the scope back off those.
+     */
+    internal fun categoriesFromGrantedPermissions(granted: Set<String>): Set<ImportCategory> =
+        ImportCategory.entries.filterTo(linkedSetOf()) { category ->
+            permissionsFor(setOf(category)).any { it in granted }
+        }
+
+    /**
+     * One-time backfill of the selection for a user who predates it, from what Android has granted.
+     *
+     * Only ever writes when NOTHING is stored, so a user who deliberately narrows to Recovery is never
+     * re-broadened, and it is safe to call from every entry point that can be the first one reached.
+     */
+    fun migrateSelectionFromGrants(context: Context, granted: Set<String>) {
+        if (prefs(context).getStringSet(CATEGORY_SELECTION_KEY, null) != null) return
+        val inferred = categoriesFromGrantedPermissions(granted)
+        if (inferred.isNotEmpty()) setSelectedCategories(context, inferred)
+    }
+
     internal fun categoriesFromStoredKeys(
         storedKeys: Set<String>?,
         hadLegacyPermissionSignature: Boolean,
@@ -261,7 +289,9 @@ object HealthConnectImporter {
         context: Context,
         repo: WhoopRepository,
         heightCm: Double = 0.0,
-        categories: Set<ImportCategory> = selectedCategories(context),
+        // Null means "whatever the user has selected", resolved AFTER the grant-based migration below. A
+        // non-lazy default is evaluated at CALL time, before the migration could widen it.
+        categories: Set<ImportCategory>? = null,
     ): ImportSummary {
         if (sdkStatus(context) != HealthConnectClient.SDK_AVAILABLE) {
             return ImportSummary.failure(SOURCE, "Health Connect is not available on this device.")
@@ -285,12 +315,18 @@ object HealthConnectImporter {
         } catch (e: Exception) {
             return ImportSummary.failure(SOURCE, "Could not read Health Connect permissions: ${e.message}")
         }
+        // #645 follow-up: a user who predates the category selector has nothing stored — recover their
+        // real scope from the grants before deciding what to read, or the first import after the update
+        // would quietly narrow them to Recovery.
+        migrateSelectionFromGrants(context, granted)
+        val effectiveCategories = categories ?: selectedCategories(context)
+
         // Partial permissions are fine (#150): import the record types the user DID grant and skip the
         // rest, instead of refusing the whole import when any single type is missing. Each per-type read
         // below is already independently fault-tolerant — a type whose read permission was revoked throws
         // and is caught/skipped in [readAll] (same path as #34) — so we only need to bail when NOTHING is
         // granted. The user choosing exactly what NOOP can see is the intended behaviour.
-        val selectedPermissions = permissionsFor(categories)
+        val selectedPermissions = permissionsFor(effectiveCategories)
         if (granted.none { it in selectedPermissions }) {
             return ImportSummary.failure(
                 SOURCE,
@@ -304,7 +340,7 @@ object HealthConnectImporter {
         val filter = TimeRangeFilter.between(start, end)
         // #528: skip our own writes on import (see readAll / isSelfWritten).
         val selfPackage = context.packageName
-        val selectedRecordTypes = readableRecordTypes(categories, granted)
+        val selectedRecordTypes = readableRecordTypes(effectiveCategories, granted)
 
         // A granted permission can outlive the category selection that originally requested it. Gate
         // on BOTH here so switching a category off stops its reads immediately without requiring the

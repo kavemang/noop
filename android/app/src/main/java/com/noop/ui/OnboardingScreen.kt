@@ -832,6 +832,11 @@ private fun ImportStep(viewModel: AppViewModel) {
             val granted = runCatching {
                 HealthConnectImporter.client(context).permissionController.getGrantedPermissions()
             }.getOrDefault(emptySet())
+            // #645: a user who predates the selector has nothing stored. Recover their real scope from
+            // what Android already grants BEFORE the checkboxes are read back, or a first visit would
+            // show Recovery-only and saving it would lock in the narrowing.
+            HealthConnectImporter.migrateSelectionFromGrants(context, granted)
+            hcReadCategories = HealthConnectImporter.selectedCategories(context)
             val selectedPermissions = HealthConnectImporter.permissionsFor(hcReadCategories)
             if (granted.any { it in selectedPermissions } &&
                 !HealthConnectImporter.hasUnaskedPermissions(context, hcReadCategories)

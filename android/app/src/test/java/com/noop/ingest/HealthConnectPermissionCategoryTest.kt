@@ -92,4 +92,42 @@ class HealthConnectPermissionCategoryTest {
 
         assertEquals(setOf(HeartRateRecord::class), readable)
     }
+
+    /**
+     * #645 migration: a user who granted Health Connect before the selector existed has no stored
+     * selection, and if they onboarded before #949 no permission signature either — the importer has
+     * shipped since 2026-06-07 and that key only since 2026-07-30. Their Android grants are the only
+     * honest record of what they agreed to, so the scope is read back off those rather than defaulted.
+     *
+     * Without this they would silently stop importing Activity and Body composition while Android still
+     * showed those permissions as granted, with nothing on screen saying why steps had stopped.
+     */
+    @Test
+    fun grantsFromBeforeTheSelectorRecoverTheirCategories() {
+        val granted = setOf(
+            HealthPermission.getReadPermission(HeartRateRecord::class),
+            HealthPermission.getReadPermission(StepsRecord::class),
+        )
+        assertEquals(
+            setOf(ImportCategory.RECOVERY, ImportCategory.ACTIVITY),
+            HealthConnectImporter.categoriesFromGrantedPermissions(granted),
+        )
+    }
+
+    /** A fresh install grants nothing, so there is nothing to recover and the caller keeps its default. */
+    @Test
+    fun noGrantsRecoversNothing() {
+        assertTrue(HealthConnectImporter.categoriesFromGrantedPermissions(emptySet()).isEmpty())
+    }
+
+    /** One granted type is enough to claim its whole category — partial grants stay supported (#150). */
+    @Test
+    fun oneGrantedTypeClaimsItsCategory() {
+        assertEquals(
+            setOf(ImportCategory.BODY_COMPOSITION),
+            HealthConnectImporter.categoriesFromGrantedPermissions(
+                setOf(HealthPermission.getReadPermission(WeightRecord::class)),
+            ),
+        )
+    }
 }

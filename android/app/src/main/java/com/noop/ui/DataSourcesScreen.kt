@@ -310,6 +310,11 @@ fun DataSourcesScreen(vm: AppViewModel) {
             val granted = runCatching {
                 HealthConnectImporter.client(context).permissionController.getGrantedPermissions()
             }.getOrDefault(emptySet())
+            // #645: a user who predates the selector has nothing stored. Recover their real scope from
+            // what Android already grants BEFORE the checkboxes are read back, or a first visit would
+            // show Recovery-only and saving it would lock in the narrowing.
+            HealthConnectImporter.migrateSelectionFromGrants(context, granted)
+            hcReadCategories = HealthConnectImporter.selectedCategories(context)
             val selectedPermissions = HealthConnectImporter.permissionsFor(hcReadCategories)
             // `any` (not `all`) is deliberate — partial grants are supported (#150). But that alone
             // would never ASK about a permission added in an update, so a newly-read type would come
