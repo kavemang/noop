@@ -661,6 +661,31 @@ class WhoopRepository(
         )
     }
 
+    /** Apply a hand-corrected bed/wake window across a BRIDGED night — every fragment, not just one.
+     *
+     *  A split night displays as one group whose bedtime is the FIRST fragment's onset and whose wake is
+     *  the group's LATEST end, while [updateSleepSessionTimes] edits the single winning fragment. On a
+     *  fragmented night that fragment is usually neither end, so correcting a night "detected too long"
+     *  narrowed an interior block and left both displayed bounds untouched: the save worked and nothing
+     *  the user could see changed. (#1492)
+     *
+     *  Fragments overlapping the new window are clipped to it and marked `userEdited`; fragments left
+     *  entirely outside are retired through [deleteSleepSession], so a DETECTED one is tombstoned and the
+     *  next analyzeRecent cannot re-detect it straight back into the night — without that, a shortened
+     *  night simply grows again on the next pass.
+     *
+     *  A one-fragment group reproduces [updateSleepSessionTimes] exactly (the lone fragment takes both
+     *  drawn bounds), so an unfragmented night keeps its previous behaviour through the same code. */
+    suspend fun updateSleepGroupTimes(group: List<SleepSession>, newStartTs: Long, newEndTs: Long) {
+        val (safeStartTs, safeEndTs) = com.noop.analytics.SleepEditGuard.clampedEditWindow(
+            newStartTs, newEndTs, System.currentTimeMillis() / 1000L,
+        ) ?: return
+        val plan = com.noop.analytics.SleepGroupEdit.plan(group, safeStartTs, safeEndTs)
+        if (plan.clipped.isEmpty()) return
+        dao.upsertSleepSessions(plan.clipped)
+        plan.dropped.forEach { deleteSleepSession(it) }
+    }
+
     /** Remove a sleep session entirely , the delete half of [updateSleepSessionTimes] with no
      *  re-insert. (deviceId, startTs) is the primary key, so it uniquely identifies the row, letting
      *  the user clear a misread or spurious night so the day recomputes without it (#281).
@@ -1167,14 +1192,19 @@ class WhoopRepository(
      * edit started from:
      *  - editing a DETECTED bout replaces it with this manual row , the detected original is dismissed
      *    durably so the re-detector doesn't bring it back (else both would show);
-     *  - editing a MANUAL row whose natural key (startTs/sport) changed deletes the stale row first
-     *    (the (deviceId, startTs, sport) PK upsert would otherwise orphan it);
+     *  - editing a MANUAL row whose PRIMARY KEY moved deletes the stale row first (the
+     *    (deviceId, startTs, sport) PK upsert would otherwise orphan it). deviceId is part of that key,
+     *    so a row stored under a re-paired strap's active id counts as moved even when startTs and sport
+     *    are untouched: the edit lands on the "my-whoop" seed while the original stays put, and
+     *    `workoutsUnion` reads [activeDeviceId, "my-whoop"] keeping the FIRST row per (startTs, sport),
+     *    so the stale copy would shadow the edit forever. Comparing only startTs/sport missed exactly
+     *    that case and made a save look successful while changing nothing (#1488);
      *  - an IMPORTED row is never passed here as `replacing` (duplicating one is a pure add).
      */
     suspend fun saveManualWorkout(row: WorkoutRow, replacing: WorkoutRow? = null) {
         if (replacing != null && replacing.source.lowercase().endsWith("-noop")) {
             dismissDetected(replacing)
-        } else if (replacing != null && (replacing.startTs != row.startTs || replacing.sport != row.sport)) {
+        } else if (replacing != null && supersedesStoredRow(replacing, row)) {
             dao.deleteWorkoutByKey(replacing.deviceId, replacing.startTs, replacing.sport)
         }
         dao.upsertWorkouts(listOf(row))
@@ -1990,6 +2020,16 @@ class WhoopRepository(
             val seen = HashSet<Pair<Long, Long>>()
             return sessions.filter { seen.add(it.startTs to it.endTs) }
         }
+
+        /** True when [replacing] is stored under a DIFFERENT primary key than the row about to be written,
+         *  so the upsert would leave it orphaned beside the new one instead of overwriting it. The key is
+         *  (deviceId, startTs, sport) — all three, which is the point: an edit whose startTs and sport are
+         *  untouched still moves when the original sits under a re-paired strap's active id and the edit is
+         *  built on the "my-whoop" seed. [dedupWorkoutsByKey] then hides the newer row behind the stale one,
+         *  so the save silently does nothing. (#1488) */
+        internal fun supersedesStoredRow(replacing: WorkoutRow, row: WorkoutRow): Boolean =
+            replacing.deviceId != row.deviceId || replacing.startTs != row.startTs ||
+                replacing.sport != row.sport
 
         /** Drop exact-duplicate workouts sharing an identical (startTs, sport) natural key — the same
          *  session read under two #814 union ids — keeping the FIRST seen (callers pass active-strap-first
