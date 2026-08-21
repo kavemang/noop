@@ -138,6 +138,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.app.DatePickerDialog
+import android.content.Context
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -153,6 +154,7 @@ import com.noop.analytics.SleepMark
 import com.noop.analytics.SleepMarkType
 import com.noop.analytics.StepsEstimateEngine
 import com.noop.analytics.StrainScorer
+import com.noop.ble.WhoopModel
 import com.noop.data.DailyMetric
 import com.noop.data.HrBucket
 import com.noop.data.SleepSession
@@ -1523,6 +1525,14 @@ fun TodayScreen(
                                     caloriesSpark = caloriesSpark,                    // #616: imported-first trend
                                     stepActivityClassForDay = stepActivityClassForDay,
                                     stepsEstimateCaption = stepsEstimateCaption(profileStore),
+                                    // Remembered on the calibration state it reads, matching the same
+                                    // preference lookup in SettingsScreen: this is a SharedPreferences
+                                    // read and the Today body recomposes with live HR.
+                                    stepsCalibrationPrompt = remember(
+                                        profileStore.stepsCalibrationSampleDays,
+                                        profileStore.stepsCalibrationCoefficient,
+                                        profileStore.stepsCalibrationManual,
+                                    ) { stepsCalibrationPrompt(context, profileStore) },
                                     restScore = restScoreForDay,
                                     restSpark = restCompositeSpark,
                                     enabledMetrics = enabledKeyMetrics,
@@ -2476,7 +2486,16 @@ private fun ScoreHeroRow(
             // iOS parity (TodayView.scoreHeroRow): three EQUAL rings in CHARGE · EFFORT · REST order, no
             // enlarged centre, filling the width as one balanced row. Ring stroke 0.10 (WHOOP weight).
             val ringGap = 14.dp
-            val ring = ((maxWidth - ringGap * 2) / 3.1f).coerceIn(90.dp, 112.dp)
+            // #1502: ONE width for all three columns. Charge and Effort used to size to their own label
+            // rows while Rest alone was pinned to `ring` (its box anchors the source badge), so the three
+            // columns came out different widths — read as "the rings aren't the same size" — and Rest's
+            // label had the least room of the three despite REST being the shortest word, which is why it
+            // was the one ellipsising to "R…". Three of these plus two gaps is exactly maxWidth.
+            val col = (maxWidth - ringGap * 2) / 3
+            // The 90.dp floor can exceed `col` once the hero is under ~298.dp wide — a small phone, a
+            // split-screen pane, a foldable's cover display. Unbounded, that overflowed the column; bounded,
+            // the vessel simply shrinks with its column instead of spilling out of it.
+            val ring = ((maxWidth - ringGap * 2) / 3.1f).coerceIn(90.dp, 112.dp).coerceAtMost(col)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(ringGap, Alignment.CenterHorizontally),
@@ -2485,6 +2504,7 @@ private fun ScoreHeroRow(
                 // CHARGE, recovery 0–100, as a liquid VESSEL with the value counting up over it. Honest
                 // empty / calibrating overlay; badges its recovery winner.
                 HeroRingColumn(
+                    modifier = Modifier.width(col),
                     domain = DomainTheme.Charge,
                     onInfo = { onScoreInfo(ScoreSection.CHARGE) },
                     onRingTap = onChargeTap,
@@ -2523,7 +2543,11 @@ private fun ScoreHeroRow(
                     }
                 }
                 // EFFORT, strain on the gauge, on the user's selected scale, as a liquid vessel.
-                HeroRingColumn(domain = DomainTheme.Effort, onInfo = { onScoreInfo(ScoreSection.EFFORT) }) {
+                HeroRingColumn(
+                    modifier = Modifier.width(col),
+                    domain = DomainTheme.Effort,
+                    onInfo = { onScoreInfo(ScoreSection.EFFORT) },
+                ) {
                     Box(contentAlignment = Alignment.Center) {
                         HeroScoreVessel(
                             fraction = if (effortOutOf > 0) effortVal / effortOutOf else 0.0,
@@ -2539,8 +2563,9 @@ private fun ScoreHeroRow(
                 }
                 // REST, sleep composite 0–100. Its fixed-width box also anchors the card-level source badge:
                 // the badge may grow leftward, but its trailing edge always matches the Rest vessel.
-                Box(modifier = Modifier.width(ring)) {
+                Box(modifier = Modifier.width(col)) {
                     HeroRingColumn(
+                        modifier = Modifier.width(col),
                         domain = DomainTheme.Rest,
                         onInfo = { onScoreInfo(ScoreSection.REST) },
                     ) {
@@ -2574,6 +2599,10 @@ private fun ScoreHeroRow(
                                 // Measure the full label even when it is wider than the Rest vessel, then
                                 // let it overflow left while preserving the vessel-aligned trailing edge.
                                 .wrapContentWidth(unbounded = true, align = Alignment.End)
+                                // #1502: the box is now the shared column width rather than the vessel's,
+                                // so inset by the slack to keep the badge's trailing edge on the VESSEL —
+                                // the alignment this anchor exists for.
+                                .padding(end = ((col - ring) / 2).coerceAtLeast(0.dp))
                                 // Match iOS: centre the pill on the card border, aligned with the Rest vessel.
                                 .offset(y = -(Metrics.space16 + Metrics.sourceBadgeHeight / 2))
                                 .semantics { contentDescription = uiString(R.string.l10n_today_screen_source_herosourcelabel_d3363687, heroSourceLabel) },
@@ -2594,12 +2623,14 @@ private fun ScoreHeroRow(
 private fun HeroRingColumn(
     domain: DomainTheme,
     onInfo: () -> Unit,
+    modifier: Modifier = Modifier,
     // A1: when non-null (Charge), the ring is tappable and opens the breakdown sheet. The chevron cue is
     // overlaid by the caller INSIDE the ring box so it adds no stacked height (#762 self-sizing parity).
     onRingTap: (() -> Unit)? = null,
     ring: @Composable () -> Unit,
 ) {
     Column(
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -2621,38 +2652,34 @@ private fun HeroRingColumn(
         } else {
             ring()
         }
-        Row(
+        // #937 wanted the WORD centred on the ring's axis, not the word-plus-chevron block, and got there
+        // by balancing the row with an invisible LEADING twin of the chevron. That worked, but it spent a
+        // second 14.dp slot plus its gap on nothing — and inside Rest's ring-width box that left the label
+        // barely 50.dp on a compact screen, so "REST" ellipsised to "R…" at a larger font scale (#1502).
+        //
+        // Centring in a Box gets the same axis for free: the column is symmetric, so a centred word sits on
+        // the ring's centre by construction, and the chevron floats at the trailing edge instead of paying
+        // for a counterweight. The word reserves 16.dp each side so it can never run under the chevron
+        // (which needs 14.dp), keeping the layout honest at any label length, and the whole box is the tap
+        // target. RTL still mirrors: Box alignments and the AutoMirrored icon both flip.
+        Box(
             modifier = Modifier
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(50))
                 .clickable { onInfo() }
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            // #937 parity: an invisible LEADING twin of the trailing chevron. The word + chevron used to
-            // centre as ONE block, which sat the word visibly off the ring's axis (worst on short labels
-            // like REST). Balancing the row with a same-sized alpha-0 chevron re-centres the WORD itself
-            // under the ring while the real chevron stays on the trailing side. alpha(0f) keeps its layout
-            // slot, the clickable Row (the tap target) only ever grows, and the Row stays plain
-            // start-to-end content, no offset maths, so RTL mirrors identically (the icon is AutoMirrored
-            // anyway). Null description keeps it out of TalkBack: it is a spacer, not content.
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = Palette.textSecondary.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .size(14.dp)
-                    .alpha(0f),
-            )
             // #74: never wrap the hero label onto a second line — at a larger font/screen-zoom (Samsung
             // One UI defaults) "REST" could wrap, growing the whole hero card. One line, ellipsis if forced.
             Text(domain.label.uppercase(), style = NoopType.overline, color = Palette.textSecondary,
-                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+                 maxLines = 1, overflow = TextOverflow.Ellipsis,
+                 modifier = Modifier.padding(horizontal = 16.dp))
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = uiString(R.string.l10n_today_screen_how_domain_label_is_calculated_8897768c, domain.label),
                 tint = Palette.textSecondary.copy(alpha = 0.6f),
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.align(Alignment.CenterEnd).size(14.dp),
             )
         }
     }
@@ -3576,6 +3603,45 @@ private fun DashboardCardRow(
             modifier = Modifier.size(12.dp),
         )
     }
+}
+
+/** #1491: the blank-Steps-tile line for a strap that ESTIMATES steps, or null when the prompt does not
+ *  apply. A WHOOP 4.0 sends no step count, so NOOP fits an estimate from motion against a phone-counted
+ *  reference and withholds it until it has one — and until #1491 the tile just went blank, with no
+ *  explanation and no route to the sheet where a coefficient can be set by hand.
+ *
+ *  Keyed on the persisted model NAME rather than [DeviceFamily.forRegistryModel]: that resolver maps
+ *  REGISTRY labels ("4.0", "WHOOP 4.0") and answers WHOOP5 for everything else, including the enum names
+ *  this preference actually stores — so routing through it would classify every 4.0 as a 5 and this would
+ *  silently never appear. A null preference (no model ever selected) also yields null, so a user with no
+ *  strap is never told to calibrate one. Mirrors the iOS `stepsPipelineActive` gate.
+ *
+ *  The wording is the engine's own [StepsEstimateEngine.CalibrationStatus.headline], which already says
+ *  "connect your phone's step count" when NO day has both motion and a phone total, rather than a
+ *  countdown that would never advance. */
+private fun stepsCalibrationPrompt(context: Context, profileStore: ProfileStore): String? {
+    val model = context.getSharedPreferences(NoopPrefs.NAME, Context.MODE_PRIVATE)
+        .getString("noop.selectedWhoopModel", null) ?: return null
+    if (model != WhoopModel.WHOOP4.name) return null
+    // Already calibrated? Then a blank day is just a quiet one — the estimate exists, this day simply did
+    // not move enough to earn a number, and there is nothing for the user to go and do. Saying otherwise
+    // would render "Need 0 more days where your phone also counted steps", because the headline's
+    // countdown is max(0, need - have) and a calibrated user is already past `need`.
+    // All three, because the first two are ENGINE outputs — written on the next analyze pass — while
+    // [ProfileStore.stepsManualCoefficient] is what the user just typed. Checking only the outputs told
+    // someone who had hand-set a coefficient to go connect a phone step source, for up to a scoring cycle
+    // afterwards. That is the same shape as the bug this whole prompt exists to fix (#1491): gating on
+    // evidence the app produces later, rather than on what the user has already done.
+    if (profileStore.stepsCalibrationCoefficient > 0.0 ||
+        profileStore.stepsCalibrationManual ||
+        profileStore.stepsManualCoefficient > 0.0
+    ) {
+        return null
+    }
+    return StepsEstimateEngine.CalibrationStatus.NeedsMoreDays(
+        have = profileStore.stepsCalibrationSampleDays,
+        need = StepsEstimateEngine.MIN_CALIBRATION_DAYS,
+    ).headline
 }
 
 /** #760/#792: the caption under an ESTIMATED Steps tile: "est. · <status detail>", where the detail is the
@@ -4700,6 +4766,9 @@ private fun MetricGrid(
     // k=… from N days + confidence tier) so a frozen-looking estimate self-explains. Built from the SAME
     // persisted calibration the estimate used; defaults to a bare "est." for callers that don't supply it.
     stepsEstimateCaption: String = "est.",
+    // #1491: the blank-tile line for a strap that ESTIMATES steps — null for a 5/MG (its strap reports a
+    // real count) and for a user who has never selected a model, so neither is told to calibrate anything.
+    stepsCalibrationPrompt: String? = null,
     restScore: Double? = null,
     // The Rest tile's sparkline: the trailing-window Rest composite (0–100, `sleep_performance`), so the
     // mini-graph tracks the Rest SCORE rather than raw sleep minutes (#614 follow-up). Other tiles still
@@ -4818,6 +4887,13 @@ private fun MetricGrid(
                 tint = Palette.metricCyan,
                 frac = steps?.let { (it / 10000.0).coerceIn(0.0, 1.0) },
                 spark = w.steps,   // #616: was missing → no trend line under the tile
+                // A measured count needs no explanation; an ESTIMATE says what it was fitted from
+                // (#760/#792); a BLANK tile on a strap that estimates says what would unblock it (#1491).
+                caption = when {
+                    realSteps != null -> null
+                    estimatedStepsForDay != null -> stepsEstimateCaption
+                    else -> stepsCalibrationPrompt
+                },
             )
         },
         KeyMetric.WEIGHT to run {
@@ -4928,6 +5004,9 @@ private data class KeyTileData(
     val unit: String,
     val tint: Color,
     val frac: Double?,
+    /** #1491: an optional one-line subtitle under the value. Only the Steps tile sets one today — the
+     *  estimate's calibration status, or why a blank tile is blank. Null leaves the tile exactly as it was. */
+    val caption: String? = null,
     val spark: List<Double> = emptyList(),
 )
 
@@ -5025,6 +5104,19 @@ private fun LiquidKeyTile(
                     maxLines = 1,
                 )
             }
+        }
+        // #1491: the Steps subtitle — the calibration status behind an estimate (#760/#792, computed and
+        // then dropped on the floor until now: `stepsEstimateCaption` was passed into this grid and never
+        // read), or, on a blank tile, what actually unblocks it. One line, ellipsised, and only rendered
+        // when a tile supplies one, so every other tile keeps its current height.
+        data.caption?.let { cap ->
+            Text(
+                cap,
+                style = NoopType.caption,
+                color = Palette.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         // Detailed rows are height-equalised (fillMaxHeight): pin the bar + graph to the bottom edge so a
         // graph-less tile's bar lines up with its neighbours' bars rather than floating mid-card.
