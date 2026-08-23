@@ -692,6 +692,9 @@ final class IntelligenceEngine: ObservableObject {
         // so the Blood Oxygen tile can surface it as a "strap estimate (unverified)" fallback. Default OFF
         // per the derived-biosignal rule (CLAUDE.md) — the @82 candidate has split cross-device evidence.
         let spo2CandidateDisplayOn = PuffinExperiment.spo2CandidateDisplayEnabled
+        // #1545: the Effort TRIMP recipe, read ONCE per pass. Global (same for every day), so it folds
+        // into the config signature below rather than the per-day key.
+        let effortMethodGlobal = PuffinExperiment.effortMethod
 
         // ── #1005 BATTERY: per-day reuse cache setup (see `dayScanCache`) ────────────────────────────
         // The stager toggles are read per-day inside the loop below, but they are global (same value every
@@ -735,6 +738,10 @@ final class IntelligenceEngine: ObservableObject {
             habitualMidsleepSec.map { "\($0)" } ?? "nil",
             "\(useSleepStagerV2Global)", "\(useMotionAwareWakeGlobal)", "\(deepHrvWindow)",
             "\(spo2CandidateDisplayOn)",
+            // #1545: MUST be here. The Effort recipe changes every day's strain, so a cached scan
+            // produced under one method is stale the moment the user switches — serving it would show a
+            // window of days scored by a recipe the user just turned off, with nothing to explain it.
+            "\(effortMethodGlobal)",
         ].joined(separator: "|")
         // Drop the whole cache on a config change, then snapshot it into a Sendable `let` for the detached
         // loop (the engine is @MainActor; the loop can't touch `self`). The loop returns the updated cache
@@ -763,6 +770,11 @@ final class IntelligenceEngine: ObservableObject {
             // diagnostic carried on `skippedDayLines`.
             var dayScanCacheLocal = inDayScanCache
             var dayCacheReused = 0
+            // #1538: per-phase cost tally. `prep` brackets the nine windowed store reads plus the
+            // session matching that sits between them and `analyzeDay`; `score` brackets `analyzeDay`
+            // itself. Emitted once per pass beside the reuse line.
+            var dayPrepSeconds = 0.0
+            var dayScoreSeconds = 0.0
             // #1538: days that were actually cacheable this pass (freshly scored AND stored under a key).
             // Together with `dayCacheReused` this is the honest denominator for the reuse ratio — see the
             // diagnostic at the end of the loop.
@@ -830,8 +842,17 @@ final class IntelligenceEngine: ObservableObject {
                     }
                 }
 
+                // #1538: split the per-day cost into the READ+PREP phase and the SCORE phase. The pass has
+                // only ever timed itself end to end, so whether ~22.6 s per night is spent materialising
+                // ~2.25 windows' worth of rows or inside `analyzeDay` is unmeasured — and that split is
+                // what decides whether narrowing the read windows is worth building at all. Measured, not
+                // guessed, for the same reason the day-cache duration is.
+                let tPrep0 = Date()
                 let hr = (try? await store.hrSamples(deviceId: owner, from: from, to: to, limit: 200_000)) ?? []
                 guard hr.count >= 200 else {
+                    // This day still paid for its read; count it, or the tally under-reports exactly the
+                    // sparse-history installs where reads dominate most.
+                    dayPrepSeconds += Date().timeIntervalSince(tPrep0)
                     skippedDayLines.append("sleep day=\(day) SKIPPED hrSamples=\(hr.count) (need ≥200)")
                     continue
                 }
@@ -1008,6 +1029,8 @@ final class IntelligenceEngine: ObservableObject {
                 } else {
                     providedSleep = []
                 }
+                let tScore0 = Date()
+                dayPrepSeconds += tScore0.timeIntervalSince(tPrep0)
                 let res = AnalyticsEngine.analyzeDay(day: day, hr: hr, rr: rr, resp: resp,
                                                      vendorResp: vendorResp, gravity: grav,
                                                      steps: steps, dayHr: dayHr, daySteps: daySteps,
@@ -1038,7 +1061,9 @@ final class IntelligenceEngine: ObservableObject {
                                                      // (dayStart == today's local midnight), so the 5000-line
                                                      // ring buffer isn't flooded; every night keeps the summary.
                                                      hrvWindowDetail: dayStart == nowLocalMidnight,
-                                                     deepHrvWindow: deepHrvWindow)
+                                                     deepHrvWindow: deepHrvWindow,
+                                                     effortMethod: effortMethodGlobal)
+                dayScoreSeconds += Date().timeIntervalSince(tScore0)
                 // #195: whole-night HRV cleaning-pipeline summary for the always-on strap log, so a "reads ~2x
                 // too high" report is triageable without the HRV test mode: RMSSD vs SDNN (rmssd >> sdnn =
                 // beat-to-beat jitter surviving the ectopic filter, not real HRV), meanNN as an HR sanity-check,
@@ -1286,6 +1311,14 @@ final class IntelligenceEngine: ObservableObject {
             skippedDayLines.append("analyzeRecent dayCache reused=\(dayCacheReused)/"
                                    + "\(dayCacheReused + dayCacheCacheable) "
                                    + "size=\(dayScanCacheLocal.count) days=\(maxDays)")
+            // #1538: where the pass actually goes. `prep` is the nine windowed store reads plus the
+            // session matching between them; `score` is `analyzeDay`. The two do not sum to the pass
+            // total — pass 2, the baseline folds and the reconciliation are outside this loop — so read
+            // them as a RATIO, which is the only thing the question needs. Reads dominating means the
+            // 54-hour window on a 24-hour stride (each row materialised ~2.25x per pass) is worth
+            // narrowing; `analyzeDay` dominating means it is not, whatever the row counts look like.
+            skippedDayLines.append("analyzeRecent cost prep=\(Int(dayPrepSeconds * 1000))ms "
+                                   + "score=\(Int(dayScoreSeconds * 1000))ms")
             return (out, skippedDayLines, dayScanCacheLocal)
         }.value
         // #1005: write the loop's updated reuse cache back to the (main-actor) stored property. The pass ran
@@ -1646,6 +1679,16 @@ final class IntelligenceEngine: ObservableObject {
             for s in night.workouts {
                 let durMin = max(0, (s.end - s.start) / 60)
                 let avgBpm = Int(s.avgHR)
+                // #1545: always-on, one line per detected bout naming what this Effort was SCORED AGAINST.
+                // A user reporting "my hard session scored 1.7" cannot currently see the HRmax that set the
+                // zone boundaries, where it came from, or whether the strap even saw most of the bout — and
+                // those three answers separate the three different causes ("the floor is doing its job",
+                // "your HRmax is wrong", "the sensor dropped out"). Reversing the arithmetic out of the
+                // displayed score is what diagnosing #1545 actually took. Same privacy class as the sibling
+                // `sleep day=` line: a day key, a duration, bpm and percentages.
+                diagnosticSink?(WorkoutDetector.boutCalibrationLine(
+                    day: daily.day, durMin: durMin, hrmax: s.hrmax, hrmaxSource: s.hrmaxSource,
+                    avgHRRPct: s.avgHRRPct, hrCoveragePct: s.hrCoveragePct, strain: s.strain), nil)
                 // The overlap test is bare time overlap (any source), so a detected bout collapses against a
                 // manual session even though their SPORTS differ ("detected" vs the user's sport) , the
                 // #975 "two workouts, one vanished" seam. Find the collider so the trace can name its source.
@@ -2133,7 +2176,8 @@ final class IntelligenceEngine: ObservableObject {
         // today and the tail is the oldest day in the window. Taking the last match would have scored
         // today's workout against a resting HR up to `maxDays` old.
         let measuredResting = out.first(where: { $0.rhr != nil })?.rhr.map(Double.init)
-        await rescoreManualWorkouts(store: store, profile: up, restingHR: measuredResting)
+        await rescoreManualWorkouts(store: store, profile: up, restingHR: measuredResting,
+                                    effortMethod: effortMethodGlobal)
 
         results = out
         note = out.isEmpty
@@ -2269,7 +2313,13 @@ final class IntelligenceEngine: ObservableObject {
     /// (negligible calories), and only when the recompute is a genuine improvement , so a well-scored
     /// 4.0 workout is never touched and a still-sparse window is a no-op.
     private func rescoreManualWorkouts(store: WhoopStore, profile up: UserProfile,
-                                       restingHR: Double? = nil) async {
+                                       restingHR: Double? = nil,
+                                       // #1545: the recipe THIS PASS scored its days with, threaded in
+                                       // rather than re-read. Re-reading would let a toggle flipped
+                                       // mid-pass score a manual workout by one recipe and the day it
+                                       // sits in by the other — the exact day-vs-bout contradiction the
+                                       // threading exists to prevent. Twin of the Kotlin parameter.
+                                       effortMethod: StrainScorer.Method = .edwards) async {
         let now = Int(Date().timeIntervalSince1970)
         let since = now - 14 * 86_400
         guard let rows = try? await store.workouts(deviceId: deviceId, from: since, to: now, limit: 200)
@@ -2284,7 +2334,8 @@ final class IntelligenceEngine: ObservableObject {
             guard let samples = try? await store.hrSamples(deviceId: deviceId, from: row.startTs,
                                                            to: row.endTs, limit: 20_000),
                   let s = ManualWorkoutRescore.scored(windowSamples: samples, profile: up, hrMax: hrMax,
-                                                      restingHR: restingHR),
+                                                      restingHR: restingHR,
+                                                      effortMethod: effortMethod),
                   ManualWorkoutRescore.improves(s, over: row.energyKcal, currentStrain: row.strain,
                                                 allowStrainOnlyFill: true)
             else { continue }

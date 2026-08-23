@@ -283,6 +283,9 @@ object IntelligenceEngine {
         // Blood Oxygen tile can surface it as a "strap estimate (unverified)" fallback. Display-only.
         // The Context-aware caller reads NoopPrefs.spo2CandidateDisplay(context) and passes it down.
         spo2CandidateDisplay: Boolean = false,
+        // #1545: the Effort TRIMP recipe. The Context-aware caller reads NoopPrefs.effortMethod(context)
+        // and passes it down, keeping this layer Context-free. EDWARDS default = byte-identical.
+        effortMethod: StrainScorer.Method = StrainScorer.Method.EDWARDS,
     ): List<Computed> = withContext(Dispatchers.Default) {
         // #1005: time the whole pass so a re-score STORM is visible in the strap log (the trigger lines
         // record WHY each pass runs; this records how many nights and how long — the CPU cost per run).
@@ -294,7 +297,8 @@ object IntelligenceEngine {
             val (out, healed) = analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride,
                 nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch,
                 recoveryEpoch, diag, useExperimentalSleepV2, useMotionAwareWake, sleepTraceSink, recoveryTraceSink,
-                stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow, spo2CandidateDisplay)
+                stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow,
+                spo2CandidateDisplay, effortMethod)
             if (healed == 0) out
             // #899 heal re-pass: the pass above deleted overlapping duplicate sleep sessions AFTER its days
             // were scored, and the read-side dedup those days consumed had no bank-recency witness (the fresh
@@ -304,7 +308,8 @@ object IntelligenceEngine {
             else analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride,
                 nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch,
                 recoveryEpoch, diag, useExperimentalSleepV2, useMotionAwareWake, sleepTraceSink, recoveryTraceSink,
-                stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow, spo2CandidateDisplay).first
+                stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow,
+                spo2CandidateDisplay, effortMethod).first
         }
         diag("re-score: done — scored ${scored.size} night(s) in ${(System.nanoTime() - reScoreStart) / 1_000_000} ms (#1005)")
         scored
@@ -402,6 +407,8 @@ object IntelligenceEngine {
         // persisted as "spo2_candidate" in metricSeries. Default false — the @82 candidate has split
         // cross-device evidence and ships behind a default-off toggle (CLAUDE.md derived-biosignal rule).
         spo2CandidateDisplay: Boolean = false,
+        // #1545: the Effort TRIMP recipe, threaded from the public wrapper.
+        effortMethod: StrainScorer.Method = StrainScorer.Method.EDWARDS,
         // #899 heal re-pass: the second component of the return is how many overlapping duplicate sleep
         // sessions the heal below deleted this pass. The public wrapper re-runs ONCE when it is non-zero
         // so the affected days re-score against the cleaned store.
@@ -571,6 +578,10 @@ object IntelligenceEngine {
             sleepConsistency?.toString() ?: "nil", habitualMidsleepSec?.toString() ?: "nil",
             useExperimentalSleepV2.toString(), useMotionAwareWake.toString(),
             deepHrvWindow.toString(), spo2CandidateDisplay.toString(),
+            // #1545: MUST be here. The Effort recipe changes every day's strain, so a cached scan
+            // produced under one method is stale the moment the user switches — serving it would show a
+            // window of days scored by a recipe the user just turned off, with nothing to explain it.
+            effortMethod.toString(),
         ).joinToString("|")
         // Drop the whole cache on a config change. Under [analyzeGate] (this whole pass runs holding the
         // lock), so mutating the object-level cache here is race-free.
@@ -579,6 +590,11 @@ object IntelligenceEngine {
             dayScanCacheConfigSig = dayCacheConfigSig
         }
         var dayCacheReused = 0
+        // #1538: per-phase cost tally. `prep` brackets the nine windowed store reads plus the session
+        // matching that sits between them and [AnalyticsEngine.analyzeDay]; `score` brackets analyzeDay
+        // itself. Emitted once per pass beside the reuse line. Byte-identical line to the Swift twin.
+        var dayPrepNanos = 0L
+        var dayScoreNanos = 0L
         // #1538: days that were actually cacheable this pass (freshly scored AND stored under a key).
         // Together with [dayCacheReused] this is the honest denominator for the reuse ratio — see the
         // diagnostic at the end of the loop.
@@ -671,6 +687,10 @@ object IntelligenceEngine {
                 }
             }
 
+            // #1538: split the per-day cost into READ+PREP and SCORE — the pass has only ever timed
+            // itself end to end, so whether the per-night cost is store reads or analyzeDay is unmeasured,
+            // and that split decides whether narrowing the read windows is worth building.
+            val tPrep0 = System.nanoTime()
             val hr = repo.hrSamples(owner, from, to, STREAM_LIMIT)
             // CAPTURE-B: capture this day's resolved read owner + HR-row count so PASS 2 can emit the
             // verbatim universal `dayOwner …` line per SCORED day (matching the iOS emit, which is in the
@@ -678,6 +698,9 @@ object IntelligenceEngine {
             // few rows is never scored, so it emits no line, byte-identical to the iOS behaviour.
             if (universalSink != null) readOwnerByDay[day] = OwnerRead(owner, hr.size)
             if (hr.size < MIN_HR_SAMPLES) {
+                // This day still paid for its read; count it, or the tally under-reports exactly the
+                // sparse-history installs where reads dominate most.
+                dayPrepNanos += System.nanoTime() - tPrep0
                 diag("sleep day=$day SKIPPED hrSamples=${hr.size} (need ≥$MIN_HR_SAMPLES)")
                 continue
             }
@@ -795,6 +818,8 @@ object IntelligenceEngine {
                     emptyList()
                 }
 
+            val tScore0 = System.nanoTime()
+            dayPrepNanos += tScore0 - tPrep0
             val res = AnalyticsEngine.analyzeDay(
                 day = day,
                 hr = hr,
@@ -842,7 +867,9 @@ object IntelligenceEngine {
                 // so the 5000-line ring buffer isn't flooded; every night still emits the 1-line summary.
                 hrvWindowDetail = dayStart == nowLocalMidnight,
                 deepHrvWindow = deepHrvWindow,
+                effortMethod = effortMethod,
             )
+            dayScoreNanos += System.nanoTime() - tScore0
 
             // #195: whole-night HRV cleaning-pipeline summary to the always-on strap log, so a "reads ~2x too
             // high" report is triageable without the HRV test mode: RMSSD vs SDNN (rmssd >> sdnn = beat-to-beat
@@ -1086,6 +1113,13 @@ object IntelligenceEngine {
         // could ever get. Byte-identical string to the Swift twin.
         diag("analyzeRecent dayCache reused=$dayCacheReused/${dayCacheReused + dayCacheCacheable} " +
             "size=${dayScanCache.size} days=$maxDays")
+        // #1538: where the pass actually goes. `prep` is the nine windowed store reads plus the session
+        // matching between them; `score` is analyzeDay. The two do NOT sum to the pass total — pass 2, the
+        // baseline folds and the reconciliation are outside this loop — so read them as a RATIO, which is
+        // the only thing the question needs. Reads dominating means the 54-hour window on a 24-hour stride
+        // (each row materialised ~2.25x per pass) is worth narrowing; analyzeDay dominating means it is
+        // not, whatever the row counts look like. Byte-identical line to the Swift twin.
+        diag("analyzeRecent cost prep=${dayPrepNanos / 1_000_000}ms score=${dayScoreNanos / 1_000_000}ms")
 
         // ── Seed the baseline from the UNION of imported nightly history + the nightly
         // values just computed. This is the recovery fix: the "-noop" nightly avgHrv/
@@ -1384,6 +1418,19 @@ object IntelligenceEngine {
             for (s in res.workouts) {
                 val durMin = maxOf(0L, (s.end - s.start) / 60L).toInt()
                 val avgBpm = s.avgHR.toInt()
+                // #1545: always-on, one line per detected bout naming what this Effort was SCORED AGAINST.
+                // A user reporting "my hard session scored 1.7" cannot currently see the HRmax that set the
+                // zone boundaries, where it came from, or whether the strap even saw most of the bout — and
+                // those three answers separate the three different causes ("the floor is doing its job",
+                // "your HRmax is wrong", "the sensor dropped out"). Reversing the arithmetic out of the
+                // displayed score is what diagnosing #1545 actually took. Same privacy class as the sibling
+                // `sleep day=` line: a day key, a duration, bpm and percentages. Mirrors the Swift line.
+                diag(
+                    WorkoutDetector.boutCalibrationLine(
+                        day = daily.day, durMin = durMin, hrmax = s.hrmax, hrmaxSource = s.hrmaxSource,
+                        avgHRRPct = s.avgHRRPct, hrCoveragePct = s.hrCoveragePct, strain = s.strain,
+                    ),
+                )
                 // Bare time overlap (any source), so a detected bout collapses against a manual session even
                 // though their sports differ , the #975 "two workouts, one vanished" seam. Name the collider.
                 val collider = realWorkouts.firstOrNull { w -> s.start < w.endTs && w.startTs < s.end }
@@ -1692,7 +1739,8 @@ object IntelligenceEngine {
         // so out[0] is today and the tail is the oldest day in the window. Taking the last match would have
         // scored today's workout against a resting HR up to `maxDays` old.
         val measuredResting = out.firstOrNull { it.rhr != null }?.rhr?.toDouble()
-        rescoreManualWorkouts(repo, profile, importedDeviceId, maxHROverride, nowSeconds, measuredResting)
+        rescoreManualWorkouts(repo, profile, importedDeviceId, maxHROverride, nowSeconds,
+            measuredResting, effortMethod)
 
         return out to healDropped.size
     }
@@ -1887,6 +1935,8 @@ object IntelligenceEngine {
         // #950: the wearer's measured resting HR (most recent scored day), threaded into scored() so the
         // rescore uses the same %HRR denominator as the day total. null → the scorer's default.
         restingHR: Double? = null,
+        // #1545: the pass's Effort recipe, so a rescored manual workout matches the day it sits in.
+        effortMethod: StrainScorer.Method = StrainScorer.Method.EDWARDS,
     ) {
         val since = nowSeconds - 14L * 86_400L
         val rows = runCatching { repo.workouts(deviceId, since, nowSeconds) }.getOrNull() ?: return
@@ -1900,7 +1950,8 @@ object IntelligenceEngine {
             if (!ManualWorkoutRescore.looksUnderScored(row.energyKcal) && row.strain != null) continue
             val samples = runCatching { repo.hrSamples(deviceId, row.startTs, row.endTs, 20_000) }
                 .getOrNull() ?: continue
-            val s = ManualWorkoutRescore.scored(samples, profile, hrMax, restingHR) ?: continue
+            val s = ManualWorkoutRescore.scored(
+                samples, profile, hrMax, restingHR, effortMethod) ?: continue
             if (!ManualWorkoutRescore.improves(s, row.energyKcal, row.strain, allowStrainOnlyFill = true)) continue
             // Never lower a summed kcal: only take the recomputed kcal when it genuinely beats the stored
             // value; a strain-only fill (merged row) keeps the existing summed energyKcal.
