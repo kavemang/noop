@@ -1978,9 +1978,9 @@
     <string name="settings_chart_classic">Classic</string>
     <string name="settings_trend_line">Line</string>
     <string name="settings_trend_bars">Bars</string>
-    <!-- #103: Blood Oxygen tile captions for the experimental WHOOP 5/MG @82 strap estimate. -->
+    <!-- #103/queue-11a: Blood Oxygen tile captions for the experimental strap estimate (WHOOP @82 or Oura ceiling@100). -->
     <string name="spo2_strap_estimate_caption">strap estimate (unverified)</string>
-    <string name="spo2_toggle_on_no_data">toggle ON · no @82 data</string>
+    <string name="spo2_toggle_on_no_data">toggle ON · no estimate yet</string>
     <string name="l10n_devices_screen_forget_device_d6eb6209">Forget device…</string>
     <string name="l10n_devices_screen_forget_device_926e503d">Forget device</string>
     <string name="l10n_devices_screen_forget_this_device_8dbbc3f3">Forget this device?</string>
@@ -2459,4 +2459,6 @@
     <string name="l10n_sleep_screen_sleep_outside_the_new_times_was_6229881e">Sleep outside the new times was removed. NOOP won\'t detect it again.</string>
     <string name="l10n_settings_screen_effort_exponential_scale">Effort: exponential intensity scale</string>
     <string name="l10n_settings_screen_effort_exponential_scale_desc">Scores Effort on an exponential intensity curve (Banister TRIMP) instead of the default heart-rate zones (Edwards). The default earns nothing below half of your heart-rate reserve, so an hour of lifting — where hard sets average out against the rests — can score close to zero. The exponential curve has no floor and weights short, hard efforts far more heavily. Re-scores your history, and both scales reach the same maximum. Off by default.</string>
+    <string name="l10n_settings_screen_allow_3ad0e369">Allow</string>
+    <string name="l10n_settings_screen_manage_bf58d17e">Manage</string>
 </resources>

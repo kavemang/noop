@@ -113,6 +113,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -484,6 +485,7 @@ fun SettingsScreen(
     vm: AppViewModel,
     onOpenTestCentre: () -> Unit = {},
     onOpenBackupSync: () -> Unit = {},
+    onOpenStepsCalibration: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -555,11 +557,6 @@ fun SettingsScreen(
     // that feeds Charge from tonight onward; the standing analyze loop picks it up on its next pass.
     // Fixes a baseline poisoned by a bad first week (worn sick, or early nights that anchored too high).
     var showRecalibrateConfirm by remember { mutableStateOf(false) }
-
-    // Steps-estimate calibration screen (WHOOP 4.0), reached from the Profile card's "Steps estimate"
-    // tap-through. Mirrors the macOS StepsCalibrationSheet: honest explainer + current fit + a recent
-    // estimated-vs-phone table + a manual coefficient override. Full-screen Dialog like the guide above.
-    var showStepsCalibration by remember { mutableStateOf(false) }
 
     // Whether the "Advanced" disclosure (experimental probes, diagnostics, raw-sensor export, Trends
     // report) is expanded. Default FALSE so a first-run user lands on the everyday sections instead of
@@ -1128,7 +1125,7 @@ fun SettingsScreen(
                         .clickable(
                             interactionSource = stepsRowInteraction,
                             indication = null,
-                        ) { showStepsCalibration = true }
+                        ) { onOpenStepsCalibration() }
                         .semantics {
                             contentDescription =
                                 uiString(R.string.l10n_settings_screen_steps_estimate_calibration_stepssummary_opens_the_d6fbf995, stepsSummary)
@@ -1213,6 +1210,49 @@ fun SettingsScreen(
                         },
                     )
                 }
+                // #1545: sits directly under the Effort SCALE row on purpose. It shipped in the
+                // experimental block beside the sleep-staging toggles, where @dofimn could not find it —
+                // a setting built for a specific report is no use if the person who asked for it cannot
+                // locate it. The two rows are different concepts (that one is the display AXIS, this one
+                // is the computation RECIPE) but a user asking "how is my Effort worked out" reaches for
+                // the same place for both, and each row's own caption separates them.
+                // #1545: Effort on Banister's EXPONENTIAL TRIMP instead of Edwards' heart-rate zones.
+                // Edwards pays nothing below 50% HRR, so an hour of lifting — hard sets averaged against
+                // the rests — can score near zero. Default OFF: it re-scores the whole window against a
+                // different recipe. Both scales top out at 100 via their own log denominator. Mirrors iOS.
+                SettingsRowDivider()
+                var banisterEffort by remember { mutableStateOf(NoopPrefs.banisterEffort(context)) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        uiString(R.string.l10n_settings_screen_effort_exponential_scale),
+                        style = NoopType.subhead,
+                        color = Palette.textPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = banisterEffort,
+                        onCheckedChange = {
+                            banisterEffort = it
+                            vm.setBanisterEffort(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Palette.surfaceBase,
+                            checkedTrackColor = Palette.accent,
+                            uncheckedThumbColor = Palette.textSecondary,
+                            uncheckedTrackColor = Palette.surfaceInset,
+                            uncheckedBorderColor = Palette.hairline,
+                        ),
+                    )
+                }
+                Text(
+                    uiString(R.string.l10n_settings_screen_effort_exponential_scale_desc),
+                    style = NoopType.caption,
+                    color = Palette.textTertiary,
+                )
             }
         }
 
@@ -1946,31 +1986,54 @@ fun SettingsScreen(
                                 )
                             }
                         }
-                        Switch(
-                            checked = batteryExempt,
-                            // A system grant can't be toggled OFF from here (that's a system action): a tap
-                            // only ever REQUESTS it, and when already exempt the switch is inert (no re-prompt).
-                            onCheckedChange = { wantOn ->
-                                if (wantOn && !batteryExempt) {
-                                    // The whole feature exists for ROMs that strip things — so the fallback
-                                    // is guarded too: if BOTH the exemption dialog and the app-settings page
-                                    // are missing, no-op rather than crash (the OEM link below is another path).
-                                    runCatching {
-                                        context.startActivity(com.noop.ble.BackgroundHealth.batteryExemptionIntent(context))
-                                    }.onFailure {
-                                        runCatching {
-                                            context.startActivity(com.noop.ble.BackgroundHealth.appBatterySettingsIntent(context))
-                                        }
+                        // #386 follow-up: an ACTION, not a Switch.
+                        //
+                        // This row reports an Android permission — `isBatteryExempt` is read nowhere outside
+                        // this screen, and the setting that actually keeps NOOP alive overnight is the
+                        // Background-connection toggle above. Rendering a permission grant as a Switch was
+                        // reported as broken ("I can enable it but can't disable it"), and that was right:
+                        // Android has no API to revoke an app's own exemption, so the off direction did
+                        // nothing and the switch sprang back. A bidirectional control was the wrong shape
+                        // for a one-way grant, so it is now a status line (above) plus one action.
+                        //
+                        // Granted -> "Manage" opens NOOP's system settings page, which is where a user CAN
+                        // revoke it. Not granted -> "Allow" fires the one-tap dialog. Either way the tap
+                        // does something, and the ON_RESUME observer re-reads the live state on return.
+                        Text(
+                            if (batteryExempt) {
+                                uiString(R.string.l10n_settings_screen_manage_bf58d17e)
+                            } else {
+                                uiString(R.string.l10n_settings_screen_allow_3ad0e369)
+                            },
+                            style = NoopType.subhead,
+                            color = Palette.accent,
+                            modifier = Modifier
+                                // This action REPLACED a Switch, which came with a comfortable touch
+                                // target for free. A bare Text is ~20dp — under the 48dp minimum, and
+                                // it is now the only way to act on this row, so it has to be padded
+                                // rather than merely present. `.clickable{}` BEFORE `.padding()`:
+                                // modifiers apply outside-in, so this puts the padding inside the
+                                // clickable node and grows the target; the reverse would not.
+                                .clickable(role = Role.Button) {
+                                    when (com.noop.ble.BackgroundHealth.batteryRowAction(batteryExempt)) {
+                                        // The whole feature exists for ROMs that strip things — so the fallback
+                                        // is guarded too: if BOTH the exemption dialog and the app-settings page
+                                        // are missing, no-op rather than crash (the OEM link above is another path).
+                                        com.noop.ble.BackgroundHealth.BatteryRowAction.RequestExemption ->
+                                            runCatching {
+                                                context.startActivity(com.noop.ble.BackgroundHealth.batteryExemptionIntent(context))
+                                            }.onFailure {
+                                                runCatching {
+                                                    context.startActivity(com.noop.ble.BackgroundHealth.appBatterySettingsIntent(context))
+                                                }
+                                            }
+                                        com.noop.ble.BackgroundHealth.BatteryRowAction.OpenAppSettings ->
+                                            runCatching {
+                                                context.startActivity(com.noop.ble.BackgroundHealth.appBatterySettingsIntent(context))
+                                            }
                                     }
                                 }
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Palette.surfaceBase,
-                                checkedTrackColor = Palette.accent,
-                                uncheckedThumbColor = Palette.textSecondary,
-                                uncheckedTrackColor = Palette.surfaceInset,
-                                uncheckedBorderColor = Palette.hairline,
-                            ),
+                                .padding(vertical = 12.dp, horizontal = 8.dp),
                         )
                     }
                 }
@@ -2624,11 +2687,16 @@ fun SettingsScreen(
                     color = Palette.textTertiary,
                 )
 
-                // --- #103: Blood Oxygen strap estimate (spo2_candidate_82) — OFF by default. ---
-                // The WHOOP 5/MG strap computes a nightly SpO₂ candidate at byte @82 of the V18Aux stream.
-                // Cross-device evidence is split (corr +0.99 on 8 nights, but 2 nights moved opposite), so
-                // it ships behind a default-off toggle and is labelled "estimate" in the UI. Display-only:
-                // never fed into a downstream gate (recovery, illness). Mirrors the iOS toggle.
+                // --- #103/queue-11a: Blood Oxygen strap estimate — OFF by default. ---
+                // Device-conditional (see IntelligenceEngine.nightlySpo2CeilingMean / .nightlySpo2CandidateMean):
+                // a WHOOP 5/MG strap computes a nightly SpO₂ candidate at byte @82 of the V18Aux stream
+                // (cross-device evidence split, corr +0.99 on 8 nights but 2 nights moved opposite); an
+                // Oura ring's own decoded 0x6F SpO2 runs high on the wire, so this instead surfaces the
+                // ceiling@100 mean (each sample capped at 100% before averaging), which has matched the
+                // Oura app's own displayed value on every full night checked so far (n=3, 2026-08-22).
+                // Neither is a validated calibration; both ship behind this one default-off toggle,
+                // labelled "estimate" in the UI, never fed into a downstream gate (recovery, illness).
+                // Mirrors the iOS toggle.
                 SettingsRowDivider()
                 var spo2CandidateDisplay by remember { mutableStateOf(NoopPrefs.spo2CandidateDisplay(context)) }
                 Row(
@@ -2658,11 +2726,14 @@ fun SettingsScreen(
                     )
                 }
                 Text(
-                    "Surfaces the WHOOP 5/MG strap's nightly SpO₂ estimate (spo2_candidate_82) in the " +
-                        "Blood Oxygen tile when no calibrated percentage is available. This is an " +
-                        "UNVERIFIED strap-computed value — it matched a reference device closely on most " +
-                        "nights but moved in the opposite direction on some. Shown as an 'estimate' and " +
-                        "never fed into recovery or illness scoring. Off by default.",
+                    "Surfaces your strap's nightly SpO₂ estimate in the Blood Oxygen tile when no " +
+                        "calibrated percentage is available: a WHOOP 5.0/MG's @82 candidate byte, or an " +
+                        "Oura ring's own reading with each sample capped at 100% first (the ring's raw " +
+                        "reading runs high otherwise). This is an UNVERIFIED strap-computed value — the " +
+                        "WHOOP candidate matched a reference device closely on most nights but moved " +
+                        "opposite on some; the Oura one has only been checked against a few nights so " +
+                        "far. Shown as an 'estimate' and never fed into recovery or illness scoring. Off " +
+                        "by default.",
                     style = NoopType.caption,
                     color = Palette.textTertiary,
                 )
@@ -2701,43 +2772,6 @@ fun SettingsScreen(
                     )
                 }
 
-                // #1545: Effort on Banister's EXPONENTIAL TRIMP instead of Edwards' heart-rate zones.
-                // Edwards pays nothing below 50% HRR, so an hour of lifting — hard sets averaged against
-                // the rests — can score near zero. Default OFF: it re-scores the whole window against a
-                // different recipe. Both scales top out at 100 via their own log denominator. Mirrors iOS.
-                SettingsRowDivider()
-                var banisterEffort by remember { mutableStateOf(NoopPrefs.banisterEffort(context)) }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Text(
-                        uiString(R.string.l10n_settings_screen_effort_exponential_scale),
-                        style = NoopType.subhead,
-                        color = Palette.textPrimary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = banisterEffort,
-                        onCheckedChange = {
-                            banisterEffort = it
-                            vm.setBanisterEffort(it)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Palette.surfaceBase,
-                            checkedTrackColor = Palette.accent,
-                            uncheckedThumbColor = Palette.textSecondary,
-                            uncheckedTrackColor = Palette.surfaceInset,
-                            uncheckedBorderColor = Palette.hairline,
-                        ),
-                    )
-                }
-                Text(
-                    uiString(R.string.l10n_settings_screen_effort_exponential_scale_desc),
-                    style = NoopType.caption,
-                    color = Palette.textTertiary,
-                )
                 Text(
                     "Scores today's hour-by-hour stress timeline against YOUR own cross-day baseline " +
                         "(how your days usually run, Oura-style) instead of the day's own calm hours. The " +
@@ -3582,26 +3616,6 @@ fun SettingsScreen(
             ) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Palette.surfaceBase) {
                     WhoopModelComparisonScreen(onClose = { showModelComparison = false })
-                }
-            }
-        }
-
-
-        // Steps-estimate calibration, opened from the Profile card's "Steps estimate" row. Same
-        // full-screen Dialog idiom; a manual-coefficient write bumps `rev` so the Profile summary
-        // row reflects the new state on dismiss.
-        if (showStepsCalibration) {
-            Dialog(
-                onDismissRequest = { showStepsCalibration = false },
-                properties = DialogProperties(usePlatformDefaultWidth = false),
-            ) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Palette.surfaceBase) {
-                    StepsCalibrationScreen(
-                        vm = vm,
-                        profile = profile,
-                        onProfileChanged = { rev++ },
-                        onClose = { showStepsCalibration = false },
-                    )
                 }
             }
         }

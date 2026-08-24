@@ -2546,8 +2546,10 @@ struct TodayView: View {
             // PER-FIELD carry: today → whole-row vitals carry → the last row that actually HAS a reading
             // (computed "-noop" rows write spo2Pct = nil), so this card agrees with the Key Metrics tile
             // (`d?.spo2Pct ?? carriedVital(perField: lastSpo2Day)`). Mirrors the Android dashboardCardValue.
-            // #103: when no calibrated spo2Pct exists AND the experimental toggle is ON, fall back to the
-            // spo2_candidate @82 sparkline tail (strap estimate, unverified) so the card shows a number.
+            // #103/queue-11a: when no calibrated spo2Pct exists AND the experimental toggle is ON, fall
+            // back to the spo2_candidate sparkline tail (WHOOP `spo2_candidate_82` or Oura ceiling@100
+            // `0x6F`, device-conditional — see IntelligenceEngine) so the card shows a strap-estimate
+            // (unverified) number instead of "—".
             let calibrated = (d?.spo2Pct ?? lastVitalsDay?.spo2Pct ?? lastSpo2Day?.spo2Pct)
             if let v = calibrated { return String(format: "%.0f%%", locale: AppLanguage.activeLocale, v) }
             if PuffinExperiment.spo2CandidateDisplayEnabled, let tail = sparks["spo2_candidate"]?.last {
@@ -3675,15 +3677,19 @@ struct TodayView: View {
             let spo2 = carriedVital(unit: "SpO₂", today: d?.spo2Pct,
                                     prior: { $0.spo2Pct }, perField: lastSpo2Day,
                                     format: { String(format: "%.0f%%", locale: AppLanguage.activeLocale, $0) })
-            // #103: SpO₂ candidate @82 fallback. When spo2Pct is nil (WHOOP 5/MG BLE-only, no import) AND
-            // the experimental toggle is ON, surface the strap's own @82 nightly mean as a "strap estimate
-            // (unverified)" so the tile shows a number instead of "—". The candidate has split cross-device
-            // evidence (corr +0.99 on 8 nights, but 2 nights moved opposite on the original device), so it
-            // ships behind a default-off toggle and is never written to `spo2Pct` (CLAUDE.md derived-
-            // biosignal rule). The sparkline switches to the candidate trend when the fallback is active.
-            // When the toggle is ON but NO candidate data exists (empty @82 stream, WHOOP 4.0, or the
-            // engine hasn't re-scored yet), show "toggle ON · no @82 data" so the user can tell the
-            // difference between "toggle off" and "toggle on but no data" — a silent blank reads as broken.
+            // #103/queue-11a: SpO₂ candidate fallback. When spo2Pct is nil AND the experimental toggle is
+            // ON, surface the device's own nightly candidate mean — WHOOP's `spo2_candidate_82` V18Aux
+            // byte, or an Oura ring's ceiling@100 `0x6F` mean (device-conditional, see
+            // IntelligenceEngine) — as a "strap estimate (unverified)" so the tile shows a number instead
+            // of "—". Neither candidate is a validated calibration (WHOOP: split cross-device evidence,
+            // corr +0.99 on 8 nights but 2 nights moved opposite on the original device; Oura: n=3
+            // full-tier same-night comparisons as of 2026-08-22, OURA_PROTOCOL.md §6.5.0), so both ship
+            // behind this one default-off toggle and neither is ever written to `spo2Pct` (CLAUDE.md
+            // derived-biosignal rule). The sparkline switches to the candidate trend when the fallback is
+            // active. When the toggle is ON but NO candidate data exists (no in-band reading for this
+            // owner's device, or the engine hasn't re-scored yet), show "toggle ON · no estimate yet" so
+            // the user can tell "toggle off" apart from "toggle on but no data" — a silent blank reads as
+            // broken.
             let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
             let candidateTail = spo2CandidateOn ? sparks["spo2_candidate"]?.last : nil
             let spo2Value = spo2.value == "—" && candidateTail != nil
@@ -3692,7 +3698,7 @@ struct TodayView: View {
             let spo2Caption: String = spo2.value == "—" && candidateTail != nil
                 ? String(localized: "strap estimate (unverified)")
                 : (spo2.value == "—" && spo2CandidateOn
-                   ? String(localized: "toggle ON · no @82 data")
+                   ? String(localized: "toggle ON · no estimate yet")
                    : (spo2.caption ?? ""))
             StatTile(
                 label: "Blood Oxygen",
@@ -4021,16 +4027,14 @@ struct TodayView: View {
     /// calibration" affordance so a user whose strap reports real steps (5/MG) or who has no strap at all
     /// never sees a steps-calibration prompt on a blank tile.
     ///
-    /// #1491: the three profile fields below are all OUTPUTS of calibration — a fitted coefficient, a
-    /// manual one, or a count of overlapping phone-counted days. Testing only those made the affordance
-    /// unreachable for the exact user it was written for: a fresh 4.0 owner with no phone step history has
-    /// all three at zero, so the tile went blank with no explanation and no way through to the sheet that
-    /// would let them set a coefficient by hand. The prompt was gated on evidence that only exists once
-    /// the thing it is prompting for has already started.
+    /// #1491: a fresh 4.0 owner has no calibration state yet, so the strap family itself must activate the
+    /// pipeline on a day with data. A fitted or manual coefficient remains a second path because calibration
+    /// is profile-global: someone who moved from a 4.0 to a 5.0 can keep using their working estimate.
     ///
-    /// The strap itself answers the question that gate was reaching for — a 4.0 sends no step count, so it
-    /// always estimates — and it answers it on day one. The calibration state it is OR-ed with is
-    /// profile-global rather than per-strap, so both halves are measuring the same user either way.
+    /// #1523: a partial sample-day count is not equivalent to a working calibration. WHOOP 5.0 records feed
+    /// the same motion-volume fitter, so a 5.0 can accumulate sample days before any coefficient exists.
+    /// Letting that counter activate the gate showed the 4.0-only calibration prompt on a strap that reports
+    /// steps natively. Only an actual coefficient is evidence that the profile should keep the estimate path.
     ///
     /// Read off the persisted selection rather than through `BLEManager.isWhoop4`: `TodayView` holds no
     /// `AppModel`, and `BLEManager` writes this same key whenever the model changes
@@ -4047,12 +4051,47 @@ struct TodayView: View {
     /// [hasDayData] stays as the second guard: it is what keeps the prompt off a date with nothing scored
     /// on it, which is a different question from whether a strap is known.
     private func stepsPipelineActive(hasDayData: Bool) -> Bool {
+        Self.stepsPipelineActive(
+            selectedModelRaw: selectedWhoopModelRaw,
+            hasDayData: hasDayData,
+            calibrationCoefficient: profile.stepsCalibrationCoefficient,
+            manualCoefficient: profile.stepsManualCoefficient,
+            calibrationSampleDays: profile.stepsCalibrationSampleDays)
+    }
+
+    /// Pure gate used by the Steps tile and its state-matrix tests. `calibrationSampleDays` is accepted so
+    /// the regression is explicit: partial fitter progress alone must never activate a strap-family feature.
+    static func stepsPipelineActive(selectedModelRaw: String,
+                                    hasDayData: Bool,
+                                    calibrationCoefficient: Double,
+                                    manualCoefficient: Double,
+                                    calibrationSampleDays: Int) -> Bool {
         // Optional-chained deliberately: an unset (or unparseable) key is NOT a 4.0. The key only ever
         // holds a `WhoopModel` rawValue, so nil here means "no strap has been identified", not "4.0".
-        (WhoopModel(rawValue: selectedWhoopModelRaw)?.deviceFamily == .whoop4 && hasDayData)
-            || profile.stepsCalibrationCoefficient > 0
-            || profile.stepsManualCoefficient > 0
-            || profile.stepsCalibrationSampleDays > 0
+        let family = WhoopModel(rawValue: selectedModelRaw)?.deviceFamily
+        // #1523 follow-up: a POSITIVELY identified 5/MG never sees this, whatever calibration state the
+        // profile carries from an earlier strap. #1579 stopped a partial sample-day count activating the
+        // affordance but left the coefficient paths able to, and those are profile-global — so a user who
+        // calibrated a 4.0 and then moved to a 5.0 still got the 4.0 prompt on any day the 5.0 logged no
+        // steps and no estimate existed. That is the same complaint #1523 opened, on a narrower trigger.
+        //
+        // The justification for the coefficient paths was preserving estimate behaviour across that
+        // migration, but this gate does not control the estimate: `estSteps` comes from `stepsEstByDay`
+        // and is computed independently. All this gate decides is whether a BLANK tile offers to
+        // calibrate — and a strap that reports steps natively has nothing to calibrate.
+        //
+        // Android has been immune by construction all along: `stepsCalibrationPrompt` returns early on
+        // `model != WhoopModel.WHOOP4.name` before reading any calibration state — and this is written the
+        // same way round, "positively identified and NOT a 4.0", rather than "is a 5". Those are the same
+        // set today because `WhoopModel` has exactly two cases, but they stop being the same the moment a
+        // third is added, and the version that would then be wrong is the one naming a specific family.
+        if let family, family != .whoop4 { return false }
+        // The coefficient paths stay for everything else, and are NOT redundant with the family check: a
+        // legacy 4.0 owner whose `selectedWhoopModel` was never written still has a coefficient, and
+        // dropping these would silently take the gear away from them.
+        return (family == .whoop4 && hasDayData)
+            || calibrationCoefficient > 0
+            || manualCoefficient > 0
     }
 
     /// #589, the honest one-liner for a blank, not-yet-calibrated Steps tile: how many more days the
@@ -4197,10 +4236,13 @@ struct TodayView: View {
         async let hrvSpark           = sparkValues("hrv", source: "my-whoop", window: 14)
         async let rhrSpark           = sparkValues("rhr", source: "my-whoop", window: 14)
         async let spo2Spark          = sparkValues("spo2", source: "my-whoop", window: 14)
-        // #103: SpO₂ candidate @82 nightly mean (WHOOP 5/MG only). Read via `exploreSeries` so the
-        // computed "-noop" metricSeries backs the trend. Empty when the toggle is OFF (the engine
-        // writes nothing) or on a WHOOP 4.0 (no v18 aux stream). Used as a fallback for the Blood
-        // Oxygen tile when `spo2Pct` is nil, labelled "strap estimate (unverified)".
+        // #103/queue-11a: SpO₂ candidate nightly mean — WHOOP `spo2_candidate_82`, or an Oura owner's
+        // ceiling@100 `0x6F` mean (device-conditional, see IntelligenceEngine). Read via `exploreSeries`
+        // so the computed "-noop" metricSeries backs the trend; "my-whoop" here is the generic "active
+        // strap" sentinel `exploreSeries` resolves through `computedReadIds`, not a WHOOP-only filter, so
+        // this already picks up an Oura ring's own computed id with no further change. Empty when the
+        // toggle is OFF (the engine writes nothing) or the owner has no in-band reading. Used as a
+        // fallback for the Blood Oxygen tile when `spo2Pct` is nil, labelled "strap estimate (unverified)".
         async let spo2CandidateSpark = sparkValuesExplore("spo2_candidate", source: "my-whoop", window: 14)
         // `resp_rate` via `exploreSeries` so a BLE-only WHOOP 5 user's on-device computed
         // `DailyMetric.respRateBpm` backs the trend (the engine writes the column, not a metricSeries
