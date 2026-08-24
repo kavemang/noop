@@ -39,6 +39,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SleepSession::class,
         MetricSeriesRow::class,
         ScoreInputProvenanceRow::class,
+        ScoreComputationProvenanceRow::class,
         JournalEntry::class,
         WorkoutRow::class,
         DismissedWorkout::class,
@@ -908,9 +909,29 @@ abstract class WhoopDatabase : RoomDatabase() {
             "ALTER TABLE `ppgWaveformSample` ADD COLUMN `burstIndex` INTEGER",
         )
 
+        /**
+         * v40 -> v41 (#1410 tier 3): build + time provenance for each computed score cell. Separate from
+         * scoreInputProvenance, which records the input provider/estimator rather than the code identity.
+         * Existing history remains absent/unknown because its computing build cannot be reconstructed.
+         */
+        internal val SCORE_COMPUTATION_PROVENANCE_MIGRATION_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `scoreComputationProvenance` (`deviceId` TEXT NOT NULL, " +
+                "`day` TEXT NOT NULL, `key` TEXT NOT NULL, `computedBy` TEXT NOT NULL, " +
+                "`computedAt` INTEGER NOT NULL, `scope` TEXT NOT NULL, " +
+                "PRIMARY KEY(`deviceId`, `day`, `key`))",
+            "CREATE INDEX IF NOT EXISTS `idx_scoreComputationProvenance_computedBy` " +
+                "ON `scoreComputationProvenance` (`computedBy`)",
+        )
+
         internal val MIGRATION_32_33 = object : Migration(32, 33) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 for (stmt in PPG_BURST_INDEX_MIGRATION_SQL) db.execSQL(stmt)
+            }
+        }
+
+        internal val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (stmt in SCORE_COMPUTATION_PROVENANCE_MIGRATION_SQL) db.execSQL(stmt)
             }
         }
 
