@@ -1568,6 +1568,23 @@ class WhoopBleClient(
         ): Boolean = strapNewestTs != null && strapNewestTs > wallNowUnix + futureSkewSeconds
 
         /**
+         * #1598: may a GET_CLOCK correlation be DERIVED for this family? WHOOP 4.0 only.
+         *
+         * A 5/MG never establishes one by design — its historical (type-47) and live (puffin REALTIME)
+         * records both carry the strap RTC's own real-unix seconds, so the Backfiller's identity default
+         * ([ClockRef.identityNow], offset 0) is the CORRECT decode for it, not a degraded one.
+         *
+         * [beginBackfill] used to seed a correlation from [strapNewestTs] for EVERY family. On a 4.0 that
+         * difference is the RTC skew, which is the point of #700. On a 5/MG `newest` is already real-unix,
+         * so `wall - newest` is merely HOW LONG THE STRAP WENT UNRECORDED (unworn, charging, flat) —
+         * applied as a clock offset it shifts that offload's history forward by exactly that gap once it
+         * clears the decoder's 1-day staleness threshold, landing a weekend's backfill on the wrong days.
+         *
+         * Mirrors the Swift `BackfillContinuation.derivesClockCorrelation`.
+         */
+        fun derivesClockCorrelation(family: DeviceFamily): Boolean = family == DeviceFamily.WHOOP4
+
+        /**
          * #324/#928: the post-sync banner for a strap whose clock is set in the FUTURE. Unlike the
          * "clock lost / not banking" case ([classifyCompletedOffload]'s bankedNothing), this strap DOES
          * bank records every pass — but its RTC relatched to a future base, so every banked timestamp
@@ -5801,16 +5818,27 @@ class WhoopBleClient(
                 val respCmd = parsed.parsed["resp_cmd"] as? String
                 val result = parsed.parsed["result"] as? String
                 // #1303: capture aid for WHOOP-4.0 stable-serial identity — the strap serial lives in the
-                // GET_HELLO_HARVARD (cmd 35) response but its byte offset is undocumented, so dump the raw
-                // payload ONCE per connect to locate it against the serial the app shows. Gated behind Test
-                // Centre → Connection so the full serial + device key never reach a DEFAULT (shareable) strap
-                // log; only an opted-in diagnostic session sees it. Log-only; decodes/persists nothing. Twin
-                // of the Swift FrameRouter dump.
+                // GET_HELLO_HARVARD (cmd 35) response. This used to dump the payload RAW, which answered the
+                // question — the serial is the 9-char alnum run at offset 14 — but a captured 4.0 response is
+                // 131 bytes carrying TWO alnum runs, and the second (offset 24, 54 chars) is the device key.
+                // Reporters attach strap logs to public issues, and Test Centre is normally enabled BECAUSE
+                // they were asked for one, so the gate selects for the logs most likely to be shared.
+                //
+                // The structural probe answers the same question without that: every printable run by offset
+                // and length, quoting only alnum runs 6..20 chars. The serial (9) still shows; the key (54)
+                // falls outside and is withheld inside the probe rather than by this caller.
+                // knownNameOffset = -1 because 16 is the 5/MG device-name offset and means nothing in a
+                // cmd-35 payload. Log-only; decodes/persists nothing. Twin of the Swift FrameRouter probe.
                 if (connectedFamily == DeviceFamily.WHOOP4 && respCmd?.startsWith("GET_HELLO_HARVARD") == true &&
                     testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
-                    val raw = whoop4CommandResponsePayload(frame)?.takeIf { it.isNotEmpty() }
-                        ?.joinToString(" ") { "%02x".format(it) } ?: "empty"
-                    log("HELLO_HARVARD(35) resp raw: $raw — locate the strap serial offset (#1303)")
+                    val helloPay = whoop4CommandResponsePayload(frame) ?: ByteArray(0)
+                    log(
+                        com.noop.protocol.HelloIdentityProbe.report(
+                            helloPay,
+                            block = "HELLO_HARVARD(35)",
+                            knownNameOffset = -1,
+                        ) + " — locate the strap serial offset (#1303)",
+                    )
                 }
                 // #1303: the 5/MG half of the same hunt. The 4.0 aid above is 4.0-only — correctly, since
                 // a 5/MG never answers cmd 35 — so this family had no capture at all, and it needs one
@@ -5888,7 +5916,19 @@ class WhoopBleClient(
                     // the one capture the issue is blocked on. Full frame (not whoop4CommandResponsePayload,
                     // which skips those very bytes); matches the GET_DATA_RANGE raw-frame line (#451). Rate-
                     // limited: a 4.0 hits this branch on every battery poll. Twin of the macOS FrameRouter dump.
-                    if (rawDumpedRespCmds.add(respCmd ?: "?")) {
+                    // …with ONE command held back, DEFENSIVELY. A WHOOP 4.0 GET_HELLO_HARVARD(35) response
+                    // is 131 bytes whose body carries the strap's DEVICE KEY (the 54-char alnum run at
+                    // offset 24, beside the serial at 14), and this dump is ungated — "normal (shareable)"
+                    // is the point of it. On the captures on record cmd 35 answers SUCCESS, so it does not
+                    // reach this branch today; the skip is not fixing an observed leak. It exists because
+                    // the branch's own premise is that a 4.0 misreports its result: the documented zeroed
+                    // [seq][result] artefact is why GET_BATTERY_LEVEL lands here while carrying a good
+                    // value, and nothing makes cmd 35 immune to it on another firmware. One command whose
+                    // body is a secret is the one #900 can spare — it needs the PREFIX provenance, which
+                    // every other command reaching here supplies. Cmd 35's content stays covered,
+                    // structurally and with the key withheld, by the HelloIdentityProbe line above. Twin of
+                    // the macOS FrameRouter skip.
+                    if (respCmd?.startsWith("GET_HELLO_HARVARD") != true && rawDumpedRespCmds.add(respCmd ?: "?")) {
                         log("  raw frame (#900 — [seq][result] provenance): " +
                             frame.joinToString("") { "%02x".format(it) })
                     }
@@ -7238,15 +7278,19 @@ class WhoopBleClient(
         // timestamp. The offset is approximate but vastly better than identity (offset 0), which can
         // mis-date nights when the strap's RTC has drifted. No-op when strapNewestTs is null (no Data
         // Range received yet) — the Backfiller keeps its identity default, same as today.
-        strapNewestTs?.let { newest ->
-            // Pair the strap's newest-record device time with the wall clock CAPTURED WHEN IT WAS READ,
-            // not `now`. WHOOP4 doesn't re-fetch the Data Range at each offload, so `now` inflated the
-            // offset by all the elapsed wall time since the last fetch (observed 46s → ~3700s over 30 min).
-            // Pairing with the capture wall keeps the offset at the strap's true RTC skew regardless of how
-            // stale [strapNewestTs] is. Fallback to now only if we somehow have the ts without its wall.
-            val wall = (strapNewestTsWall ?: (System.currentTimeMillis() / 1000L)).toInt()
-            backfiller.clockRef = ClockRef(device = newest.toInt(), wall = wall)
-            log("Clock: seeded backfiller correlation from Data Range (device=$newest wall=$wall, offset ${wall - newest}s)")
+        // #1598: WHOOP 4.0 ONLY — see [derivesClockCorrelation]. Seeding this on a 5/MG turned "how long
+        // the strap went unrecorded" into a bogus clock offset and misdated its history.
+        if (derivesClockCorrelation(connectedFamily)) {
+            strapNewestTs?.let { newest ->
+                // Pair the strap's newest-record device time with the wall clock CAPTURED WHEN IT WAS READ,
+                // not `now`. WHOOP4 doesn't re-fetch the Data Range at each offload, so `now` inflated the
+                // offset by all the elapsed wall time since the last fetch (observed 46s → ~3700s over 30 min).
+                // Pairing with the capture wall keeps the offset at the strap's true RTC skew regardless of how
+                // stale [strapNewestTs] is. Fallback to now only if we somehow have the ts without its wall.
+                val wall = (strapNewestTsWall ?: (System.currentTimeMillis() / 1000L)).toInt()
+                backfiller.clockRef = ClockRef(device = newest.toInt(), wall = wall)
+                log("Clock: seeded backfiller correlation from Data Range (device=$newest wall=$wall, offset ${wall - newest}s)")
+            }
         }
         // #42/#364: consecutiveAutoContinues > 0 means this offload is re-kicked after an EARLIER session
         // in the same burst banked rows — tell the backfiller so its no-cursor END reads as "caught up",
