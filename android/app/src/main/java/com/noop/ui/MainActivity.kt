@@ -1265,6 +1265,31 @@ object NoopPrefs {
             if (fw.isNullOrBlank()) remove(KEY_LAST_FIRMWARE) else putString(KEY_LAST_FIRMWARE, fw)
         }.apply()
     }
+
+    /** This device's own persisted firmware, keyed by BLE address - see [com.noop.ble.firmwarePrefKey].
+     *  Null when nothing was ever recorded for that device. */
+    fun firmwareFor(context: Context, peripheralId: String?): String? =
+        com.noop.ble.firmwarePrefKey(peripheralId)?.let { of(context).getString(it, null) }
+
+    /** True when the 5/MG CLIENT_HELLO has been latched off for this device after the give-up (#1635).
+     *  Absent key == not suppressed, so an unknown device always gets its first attempt. */
+    fun helloSuppressed(context: Context, peripheralId: String?): Boolean =
+        com.noop.ble.helloSuppressionPrefKey(peripheralId)?.let { of(context).getBoolean(it, false) } ?: false
+
+    /** Latch or clear the hello suppression for one device. A blank address writes nothing. */
+    fun setHelloSuppressed(context: Context, peripheralId: String?, suppressed: Boolean) {
+        val key = com.noop.ble.helloSuppressionPrefKey(peripheralId) ?: return
+        of(context).edit().apply { if (suppressed) putBoolean(key, true) else remove(key) }.apply()
+    }
+
+    /** Record a firmware string against the device it came from. A blank address writes nothing rather
+     *  than writing to a key that belongs to no device. */
+    fun setFirmwareFor(context: Context, peripheralId: String?, fw: String?) {
+        val key = com.noop.ble.firmwarePrefKey(peripheralId) ?: return
+        of(context).edit().apply {
+            if (fw.isNullOrBlank()) remove(key) else putString(key, fw)
+        }.apply()
+    }
 }
 
 /**

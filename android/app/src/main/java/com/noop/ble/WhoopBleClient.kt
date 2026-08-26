@@ -885,6 +885,14 @@ class WhoopBleClient(
          * stale-direct-bond scan-fallback ([staleDirectBond]), it was not our OWN localTerminate bounce
          * (already counted by [onBondWatchdog]), and we are not already paused. A healthy strap that bonds on
          * the first connect has didBond == true, so it is never counted and its behaviour is unchanged.
+         *
+         * [helloSuppressed] excludes the #1635 strap, and it is not optional. Suppression makes `didBond`
+         * PERMANENTLY false by design — the handshake is deliberately not being sent — so every ordinary
+         * involuntary drop (out of range, radio off, a walk away from the phone) would otherwise look like
+         * "connects but never pairs" and march this counter toward a pause. That would undo the suppression
+         * a few drops later and hand the user a re-pair guide blaming a stale pairing, for a strap whose
+         * unbonded state NOOP chose on purpose. Not-bonding is only evidence of a fault when we were
+         * actually trying to bond.
          */
         internal fun shouldCountNeverBondedSelfDrop(
             wasConnected: Boolean,
@@ -893,8 +901,9 @@ class WhoopBleClient(
             staleDirectBond: Boolean,
             status: Int,
             alreadyPausedForBondLoop: Boolean,
+            helloSuppressed: Boolean,
         ): Boolean = wasConnected && !didBond && !intentionalDisconnect && !staleDirectBond &&
-            status != GATT_CONN_TERMINATE_LOCAL_HOST && !alreadyPausedForBondLoop
+            status != GATT_CONN_TERMINATE_LOCAL_HOST && !alreadyPausedForBondLoop && !helloSuppressed
 
         /** Pure guard for a delayed service-discovery kick. The operation belongs only to the exact
          *  connection that scheduled it, and a temporarily-missing GATT wrapper must not consume the
@@ -2185,6 +2194,28 @@ class WhoopBleClient(
     /// `batterySource(familyEstablished, connectedFamily)` is the correct order): seeing this true then
     /// establishes happens-before for the [connectedFamily] write that precedes it at discovery. Swapping
     /// the two parameters would silently drop that guarantee.
+    /** #1634: last firmware-gate line logged, so a stable per-connection value is not repeated on every
+     *  hello. Cleared in [reset] with the rest of the per-connection state. */
+    @Volatile private var loggedFirmwareGate: String? = null
+
+    /** #1635: when the 5/MG CLIENT_HELLO write was issued, so its completion - or the absence of one -
+     *  can be reported with an elapsed time. 0 means none is outstanding. Cleared in [reset]. */
+    @Volatile private var clientHelloWriteAtMs: Long = 0L
+
+    /** #1635: ms since the CLIENT_HELLO write, or null when none is outstanding. Lets the bond-state
+     *  observer time a pairing transition against the write that may have triggered it, and report no
+     *  elapsed time at all for a transition belonging to some other pairing. */
+    val msSinceClientHello: Long?
+        get() = clientHelloWriteAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
+
+    /** #1635: record an OS bond-state transition in the strap log. The OS pairing flow has never been
+     *  observed, which is what leaves the 5/MG bond failure undecided - see [bondStateTraceLine]. */
+    fun onBondStateChanged(previous: Int, current: Int, address: String?) {
+        val since = msSinceClientHello
+        if (!shouldTraceBondState(address, lastDeviceAddress, since != null)) return
+        log(bondStateTraceLine(previous, current, address, since))
+    }
+
     @Volatile private var familyEstablished = false
 
     /// The family actually discovered on the connected peripheral. Drives family-aware frame
@@ -2893,6 +2924,9 @@ class WhoopBleClient(
     @SuppressLint("MissingPermission")
     fun connect(model: WhoopModel = WhoopModel.WHOOP4) {
         intentionalDisconnect = false
+        // #1635: an explicit Connect is the user saying "try the handshake again" — the documented way out
+        // of hello suppression, and the reason suppression is never a permanent verdict.
+        helloRetryRequested = true
         // PR #588: an explicit user-driven Connect is never an out-of-range retry — clear the involuntary-
         // reconnect streak so this scan (and any reconnects it spawns) starts back at the snappy
         // LOW_LATENCY scan mode + the 3s backoff base, never inheriting a backed-off lower-power scan.
@@ -4599,6 +4633,13 @@ class WhoopBleClient(
      *  against the teardown it is about to perform. None of the five is on a per-record path. */
     private fun noteLocalTeardown(origin: String) { lastLocalTeardown = origin }
 
+    /** Set by an explicit user Connect so the NEXT 5/MG session re-attempts a suppressed CLIENT_HELLO
+     *  (#1635). Consumed on use, so it grants exactly one retry: someone who put the strap in pairing mode
+     *  gets a fresh attempt, and a strap that still will not answer latches straight back off instead of
+     *  resuming the five-second loop the suppression exists to end. */
+    @Volatile
+    private var helloRetryRequested = false
+
     /** Consecutive involuntary reconnect attempts, feeding the capped-exponential [ReconnectBackoff]
      *  (3, 6, 12, 24, 48, 60s…). Replaces the old fixed [RECONNECT_DELAY_MS] rescan loop so a strap
      *  that's genuinely out of range stops hammering BLE — the Android twin of the iOS
@@ -4901,10 +4942,17 @@ class WhoopBleClient(
      *  iOS BLEManager, which only sets pairingHint on the puffin link). Independent of the multi-WHOOP
      *  pin recovery in [noteBondRefusalIfPinned], which is left untouched. The guidance is mirrored into
      *  [statusNote] (already rendered on the Live screen) so it surfaces with no UI-layer change. */
-    private fun noteBondRefusalForPairingHint(status: Int, failedAddress: String?) {
-        if (!isInsufficientAuthStatus(status)) return
-        if (didBond) return                                       // already bonded — not a pairing problem
-        if (connectedFamily != DeviceFamily.WHOOP5) return        // WHOOP 4 bonds cleanly; hint is 5/MG-only
+    private fun noteBondRefusalForPairingHint(
+        status: Int,
+        failedAddress: String?,
+        helloUnacked: Boolean = false,
+    ) {
+        // #1635: an unanswered CLIENT_HELLO is as much a refusal as an auth rejection, for the purpose of
+        // giving up. It was invisible here because the gate tested only the status, and an unanswered
+        // handshake presents as a plain local terminate - so the streak never grew and the loop never
+        // stopped. The two signals stay SEPARATE below: only one of them supports naming a cause.
+        val authRefusal = isInsufficientAuthStatus(status)
+        if (!countsAsBondRefusal(authRefusal, helloUnacked, didBond, connectedFamily)) return
         bondRefusalStreak++
         if (bondGiveUp.gaveUp) {
             // #78 hole-4: a refusal during a paused-state salvage probe must not stomp the paused hint
@@ -4918,22 +4966,46 @@ class WhoopBleClient(
             if (_state.value.pairingHint == null) {
                 log("WHOOP 5/MG: encrypted bond refused $bondRefusalStreak times — surfacing pairing guidance (#78)")
             }
-            _state.update { it.copy(pairingHint = PAIRING_HINT_TEXT, statusNote = PAIRING_HINT_TEXT) }
+            // PAIRING_HINT_TEXT names a specific cause (still bonded to the official app). Only an auth
+            // refusal is evidence for that; an unanswered handshake is not, so it waits for the give-up's
+            // honest paused hint rather than being told to close an app that may be irrelevant.
+            if (authRefusal) {
+                _state.update { it.copy(pairingHint = PAIRING_HINT_TEXT, statusNote = PAIRING_HINT_TEXT) }
+            }
         }
         // #747 / #750: feed the same refusal into the give-up tracker. Once it crosses the higher threshold
         // (the pairing hint has had several cycles to be acted on), pause auto-reconnect so we stop hammering
         // a strap that can't bond, write the one-line epitaph (opaque hashed id only, no PII), and surface
         // the honest paused hint. A genuine bond or a manual reconnect re-arms it.
         if (bondGiveUp.recordRefusal()) {
-            autoReconnectPausedForBondLoop = true
-            bondLoopPausedAtMs = System.currentTimeMillis()   // starts the #78 hole-4 salvage-probe floor
+            // #1635: an unanswered handshake and an auth refusal want opposite treatment — see
+            // [giveUpSuppressesHello]. Suppressing keeps a link that is streaming live HR; pausing is for a
+            // strap that actively declined and cannot be helped by reconnecting.
+            val opaque = BondRefusalGiveUp.opaqueId(failedAddress ?: "device")
+            val suppress = giveUpSuppressesHello(authRefusal)
+            if (suppress) {
+                runCatching { com.noop.ui.NoopPrefs.setHelloSuppressed(context, failedAddress, true) }
+                log(BondRefusalGiveUp.helloSuppressedEpitaph(bondGiveUp.refusals, opaque))
+            } else {
+                autoReconnectPausedForBondLoop = true
+                bondLoopPausedAtMs = System.currentTimeMillis()   // #78 hole-4 salvage-probe floor starts here
                 // #1539: park the connect in the same breath as the pause, so this can end while backgrounded.
                 standingConnectWhilePausedIfDue(justTripped = true)
-            val opaque = BondRefusalGiveUp.opaqueId(failedAddress ?: "device")
-            log(BondRefusalGiveUp.epitaphLine(bondGiveUp.refusals, opaque))
-            _state.update { it.copy(pairingHint = BondRefusalGiveUp.pausedHint()) }
+                log(BondRefusalGiveUp.epitaphLine(bondGiveUp.refusals, opaque))
+            }
+            // Each branch gets the hint that matches what it actually DID. The paused hints say
+            // "auto-reconnect is paused"; on the suppression branch nothing is paused, so saying so would be
+            // the same confidently-wrong diagnostic this issue has produced twice already (#1635).
+            _state.update {
+                it.copy(pairingHint = when {
+                    suppress -> BondRefusalGiveUp.helloSuppressedHint()
+                    authRefusal -> BondRefusalGiveUp.pausedHint()
+                    else -> BondRefusalGiveUp.pausedHintHandshakeUnanswered()
+                })
+            }
             if (testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
-                log("bond gaveUp refusals=${bondGiveUp.refusals} id=$opaque (auto-reconnect paused)",
+                log("bond gaveUp refusals=${bondGiveUp.refusals} id=$opaque " +
+                    if (suppress) "(hello suppressed, staying connected)" else "(auto-reconnect paused)",
                     com.noop.testcentre.TestDomain.CONNECTION)
             }
         }
@@ -4943,6 +5015,9 @@ class WhoopBleClient(
      *  the mirrored [statusNote] only when it still carries the hint, so we never wipe an unrelated note. */
     private fun clearPairingHint() {
         bondRefusalStreak = 0
+        // #1635: a genuine bond proves the handshake works on this strap — drop the suppression latch so a
+        // later transient failure starts from a clean slate rather than inheriting an old verdict.
+        runCatching { com.noop.ui.NoopPrefs.setHelloSuppressed(context, lastDeviceAddress, false) }
         // #747/#750: a genuine bond or a fresh user connect re-arms auto-reconnect and clears the give-up.
         bondGiveUp.reset()
         // #971: a genuine bond or a fresh user connect also clears the bond-watchdog bounce streak, so the
@@ -5303,6 +5378,28 @@ class WhoopBleClient(
             // Port of didWriteValueFor: a CONFIRMED-write completion (no error) == bonding succeeded.
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 log("Confirmed write failed: status=$status")
+                // #1635: a FAILED completion is still a completion, and it carries two obligations.
+                //
+                // Report it: before this, a failed callback produced no line at all and then a false
+                // "NO write callback" at disconnect — the outcome line tells the truth instead.
+                //
+                // And release the window, but ONLY for the hello's own write. Clearing it stops the
+                // disconnect path counting the same cycle twice (which would trip the give-up at half the
+                // intended streak on exactly the auth refusals that already worked), and leaving it open on
+                // a hello that definitively failed would let the NEXT completion on fd4b0002 — DISABLE_ALARM
+                // and every other puffin command share it — satisfy both halves of the bond gate below and
+                // declare a bond the strap never granted. A FOREIGN write failing says nothing about the
+                // hello, so it must not consume the window a genuine ack is still owed.
+                val failedHelloChar = characteristic.uuid == WHOOP5_CMD_WRITE_CHAR
+                if (clientHelloWriteAtMs > 0L) {
+                    log(clientHelloOutcomeLine(
+                        isHelloChar = failedHelloChar,
+                        charUuid = characteristic.uuid.toString(),
+                        elapsedMs = System.currentTimeMillis() - clientHelloWriteAtMs,
+                        status = gattWriteStatusLabel(status),
+                    ))
+                }
+                if (failedHelloChar) clientHelloWriteAtMs = 0L
                 // Multi-WHOOP stale-pin recovery (#52). A status of INSUFFICIENT_AUTHENTICATION (5) /
                 // INSUFFICIENT_ENCRYPTION (15) on the bond write == the strap refused the encrypted bond
                 // (the Android twin of the iOS "Encryption/Authentication is insufficient" error). When a
@@ -5330,36 +5427,77 @@ class WhoopBleClient(
                     )
                 }
             } else if (!didBond && connectedFamily == DeviceFamily.WHOOP5) {
-                // EXPERIMENTAL (issue #17): the CLIENT_HELLO is now a confirmed write, so this ACK means
-                // just-works bonding completed. Now subscribe the puffin notify chars (realtime HR rides
-                // these as REALTIME_DATA — the strap rejected them on the unauthenticated link), then arm
-                // realtime HR with puffin framing. Mirrors the macOS post-bond flow.
-                didBond = true
-                cancelBondWatchdog()          // genuine bond reached — the handshake watchdog stands down (#50)
-                noteGenuineBond(g.device.address)   // #52: this strap bonds fine; clears any pin-refusal streak
-                clearPairingHint()            // #78: a genuine bond means the pairing guidance no longer applies
-                bondedDirectAttempt = false   // fast-path connect reached a real session (#78 fork)
-                staleDirectFailures = 0       // genuine bond — clear the wiped-bond counter (#84 parity)
-                _state.update { it.copy(bonded = true, encryptedBond = true) }   // genuine bond (#69)
-                bondedAtMs = System.currentTimeMillis()   // #617: stamp the bond so handleDisconnect can spot a bond-then-quick-timeout loop
-                emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
-                log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
-                g.getService(WHOOP5_SERVICE)?.let { svc ->
-                    for (u in WHOOP5_NOTIFY_CHARS) svc.getCharacteristic(u)?.let { cccdQueue.add(it) }
+                // #1635: report WHICH characteristic completed, then gate the bond on it. This branch used
+                // to match on family alone, so ANY completion on a 5/MG link was taken as the CLIENT_HELLO
+                // ack. The field capture that sized it saw exactly that: the hello was rejected by the stack
+                // (nothing owed), DISABLE_ALARM's completion landed on the SAME characteristic a moment
+                // later, and the link was declared bonded on the strength of it.
+                val isHelloChar = characteristic.uuid == WHOOP5_CMD_WRITE_CHAR
+                // Read BEFORE the diagnostic below zeroes it — the gate needs the pre-clear value.
+                val helloOutstanding = clientHelloWriteAtMs > 0L
+                if (helloOutstanding) {
+                    log(clientHelloOutcomeLine(
+                        isHelloChar = isHelloChar,
+                        charUuid = characteristic.uuid.toString(),
+                        elapsedMs = System.currentTimeMillis() - clientHelloWriteAtMs,
+                        status = gattWriteStatusLabel(status),
+                    ))
+                    // Consume the window ONLY for the hello's own completion. A foreign completion that
+                    // cleared it would make a genuine ack arriving afterwards look unsolicited, costing a
+                    // real bond — the one regression this gate must not introduce.
+                    //
+                    // An UNACKED hello leaves the window open, and no later command can inherit it: the
+                    // hello holds `writeInFlight` until its callback fires, and drainWriteQueue refuses to
+                    // start a write while one is in flight (#1095 keys off exactly that stuck state).
+                    if (isHelloChar) clientHelloWriteAtMs = 0L
+                } else {
+                    // Declining must not be silent — see [clientHelloDeclinedLine].
+                    log(clientHelloDeclinedLine(
+                        charUuid = characteristic.uuid.toString(),
+                        status = gattWriteStatusLabel(status),
+                    ))
                 }
-                // The 5/MG handshake tail (SET_CLOCK/GET_CLOCK + the offload kick) now runs when THIS
-                // CCCD drain completes — see drainCccdQueue's queue-empty branch. Clock-before-history
-                // is mandatory: an un-clocked WHOOP 5 doesn't save sensor data to flash at all
-                // ("RTC timestamp … is invalid; not saving data to flash"), so history offloads
-                // "succeed" with zero body frames. Hardware-validated ordering: CLIENT_HELLO →
-                // subscribe puffin chars → clock → history. (#78 fork)
-                drainCccdQueue(g)
-                // #927: RE-DERIVE the want at arm time, never the precomputed [wantsRealtime]: that value
-                // can be up to a keep-alive tick (30 s) stale, and a reconnect just OUTSIDE the overnight
-                // window would re-arm the stream from it and stay armed until the next tick.
-                val realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
-                wantsRealtime = realtimeWantNow
-                if (realtimeWantNow) { realtimeArmed = true; send(CommandNumber.TOGGLE_REALTIME_HR, byteArrayOf(1)) }
+                // Only the hello's OWN completion is evidence of a bond. Declining here withholds the
+                // bond declaration and nothing else: the in-flight slot is released and the write queue
+                // drains at the end of this callback either way.
+                if (completionIsClientHelloAck(
+                        isHelloChar = isHelloChar,
+                        helloOutstanding = helloOutstanding,
+                        alreadyBonded = didBond,
+                        isWhoop5 = true,
+                    )
+                ) {
+                    // EXPERIMENTAL (issue #17): the CLIENT_HELLO is now a confirmed write, so this ACK means
+                    // just-works bonding completed. Now subscribe the puffin notify chars (realtime HR rides
+                    // these as REALTIME_DATA — the strap rejected them on the unauthenticated link), then arm
+                    // realtime HR with puffin framing. Mirrors the macOS post-bond flow.
+                    didBond = true
+                    cancelBondWatchdog()          // genuine bond reached — the handshake watchdog stands down (#50)
+                    noteGenuineBond(g.device.address)   // #52: this strap bonds fine; clears any pin-refusal streak
+                    clearPairingHint()            // #78: a genuine bond means the pairing guidance no longer applies
+                    bondedDirectAttempt = false   // fast-path connect reached a real session (#78 fork)
+                    staleDirectFailures = 0       // genuine bond — clear the wiped-bond counter (#84 parity)
+                    _state.update { it.copy(bonded = true, encryptedBond = true) }   // genuine bond (#69)
+                    bondedAtMs = System.currentTimeMillis()   // #617: stamp the bond so handleDisconnect can spot a bond-then-quick-timeout loop
+                    emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
+                    log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
+                    g.getService(WHOOP5_SERVICE)?.let { svc ->
+                        for (u in WHOOP5_NOTIFY_CHARS) svc.getCharacteristic(u)?.let { cccdQueue.add(it) }
+                    }
+                    // The 5/MG handshake tail (SET_CLOCK/GET_CLOCK + the offload kick) now runs when THIS
+                    // CCCD drain completes — see drainCccdQueue's queue-empty branch. Clock-before-history
+                    // is mandatory: an un-clocked WHOOP 5 doesn't save sensor data to flash at all
+                    // ("RTC timestamp … is invalid; not saving data to flash"), so history offloads
+                    // "succeed" with zero body frames. Hardware-validated ordering: CLIENT_HELLO →
+                    // subscribe puffin chars → clock → history. (#78 fork)
+                    drainCccdQueue(g)
+                    // #927: RE-DERIVE the want at arm time, never the precomputed [wantsRealtime]: that value
+                    // can be up to a keep-alive tick (30 s) stale, and a reconnect just OUTSIDE the overnight
+                    // window would re-arm the stream from it and stay armed until the next tick.
+                    val realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
+                    wantsRealtime = realtimeWantNow
+                    if (realtimeWantNow) { realtimeArmed = true; send(CommandNumber.TOGGLE_REALTIME_HR, byteArrayOf(1)) }
+                }
             } else if (!didBond && connectedFamily == DeviceFamily.WHOOP4) {
                 didBond = true
                 cancelBondWatchdog()          // secure handshake completed — stand the watchdog down (#50)
@@ -5842,7 +5980,21 @@ class WhoopBleClient(
                     if (_state.value.strapFirmware != fw) {
                         _state.update { it.copy(strapFirmware = fw) }
                         // Persist so the debug export can name the firmware offline (state clears on disconnect).
-                        runCatching { NoopPrefs.setLastFirmware(context, fw) }
+                        // Keyed by the address THIS connection used, not globally: a second strap would otherwise
+                        // overwrite the first's value and both would report whichever connected last - a 5/MG showing
+                        // a 4.0's 41.17.6.0.
+                        runCatching { NoopPrefs.setFirmwareFor(context, lastDeviceAddress, fw) }
+                    }
+
+                    }
+
+                    // #1634: the 5/MG hello decoded no firmware. The guards fail closed by design, so this is the
+                    // only place that can say WHY - a different generation byte vs a MOVED offset. Logged once per
+                    // connection (the value is stable), so a capture from an undecoded strap carries the evidence.
+                    (parsed.parsed["fw_gate"] as? String)?.let { gate ->
+                    if (loggedFirmwareGate != gate) {
+                    loggedFirmwareGate = gate
+                    log(gate)
                     }
                 }
                 val respCmd = parsed.parsed["resp_cmd"] as? String
@@ -7081,12 +7233,14 @@ class WhoopBleClient(
         // Hold the slot until the ACK; the opt-in puffin probe now fires post-bond (onCharacteristicWrite).
         log("WHOOP 5/MG: writing CLIENT_HELLO to fd4b0002 with response (to trigger bonding, experimental).")
         writeInFlight = true
+        clientHelloWriteAtMs = System.currentTimeMillis()
         val ok = safeGatt("writeClientHello") {
             ops.writeCharacteristicCompat(ch, hello, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         }
         if (!ok) {
             writeInFlight = false
             log("CLIENT_HELLO write rejected by stack")
+            clientHelloWriteAtMs = 0L   // never went out; no callback is owed
         }
     }
 
@@ -7108,7 +7262,31 @@ class WhoopBleClient(
         }
         when (connectedFamily) {
             DeviceFamily.WHOOP4 -> writeBondFrame(g, cmd)
-            DeviceFamily.WHOOP5 -> writeClientHello(g, cmd)
+            DeviceFamily.WHOOP5 -> {
+                // #1635: the hello is what ends the link on a strap that never answers it. Once the
+                // give-up has latched, skip it and let the standard-profile HR stream keep running.
+                //
+                // Consumed unconditionally, so the single retry an explicit Connect grants belongs to THIS
+                // session. Leaving it set would hand a stale retry to some later automatic reconnect and
+                // restart the loop the suppression exists to end.
+                val userAsked = helloRetryRequested
+                helloRetryRequested = false
+                val suppressed = runCatching {
+                    com.noop.ui.NoopPrefs.helloSuppressed(context, g.device.address)
+                }.getOrDefault(false)
+                if (shouldSendClientHello(suppressed, userInitiated = userAsked)) {
+                    writeClientHello(g, cmd)
+                } else {
+                    // The watchdog was armed at discovery, before this decision could be made, and it
+                    // bounces the link whenever didBond is still false. Suppressing the hello guarantees
+                    // didBond stays false, so leaving it armed would just move the drop from ~4.8s out to
+                    // the 7s window — the same loop, slower. There is no handshake left to time out.
+                    cancelBondWatchdog()
+                    log("WHOOP 5/MG: CLIENT_HELLO suppressed for this strap — it was never acknowledged and" +
+                        " the write is what drops the link. Staying on live HR (not fully paired); press" +
+                        " Connect to try the handshake again (#1635).")
+                }
+            }
         }
     }
 
@@ -7995,6 +8173,21 @@ class WhoopBleClient(
 
     @SuppressLint("MissingPermission")
     private fun handleDisconnect(status: Int) {
+        val helloWasUnacked = clientHelloWriteAtMs > 0L
+        // #1635: a CLIENT_HELLO that was accepted by the stack and never completed leaves no trace at
+        // all - the dominant shape in the field capture (14 of 16). Say so before the state is reset.
+        if (clientHelloWriteAtMs > 0L) {
+            log(clientHelloOutcomeLine(false, null, System.currentTimeMillis() - clientHelloWriteAtMs, null))
+            clientHelloWriteAtMs = 0L
+        }
+
+        // #1635: and count it as a refusal so the give-up can latch. Only when the status is NOT an auth
+        // rejection - those already reach noteBondRefusalForPairingHint from onCharacteristicWrite, and
+        // counting the same cycle twice would trip the give-up at half the intended streak.
+        if (helloWasUnacked && !isInsufficientAuthStatus(status)) {
+            noteBondRefusalForPairingHint(status, lastDeviceAddress, helloUnacked = true)
+        }
+
         // #1151: flush any pending frame-timing window so the frames right before this drop are recorded
         // (not stranded), and the next connection starts a fresh window rather than spanning the gap. No-op
         // when capture is off. Do it BEFORE the connect-down line so the summary reads before the drop.
@@ -8093,6 +8286,9 @@ class WhoopBleClient(
                 staleDirectBond = staleDirectBond,
                 status = status,
                 alreadyPausedForBondLoop = autoReconnectPausedForBondLoop,
+                helloSuppressed = runCatching {
+                    com.noop.ui.NoopPrefs.helloSuppressed(context, lastDeviceAddress)
+                }.getOrDefault(false),
             ) && bondWatchdogBackoff.recordBounce()
         ) {
             log("Strap connects and subscribes but never finishes pairing, then self-drops before the bond watchdog fires (${bondWatchdogBackoff.consecutiveBounces} cycles) " +
@@ -8286,6 +8482,8 @@ class WhoopBleClient(
         didBond = false
         connectHandshakeDone = false
         familyEstablished = false   // the next link re-establishes it at service discovery
+        loggedFirmwareGate = null
+        clientHelloWriteAtMs = 0L
         seq.set(0)
         writeQueue.clear()
         cccdQueue.clear()
