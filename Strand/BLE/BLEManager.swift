@@ -1286,7 +1286,8 @@ public final class BLEManager: NSObject, ObservableObject {
         // persists raw frames. Flip "enableRawCapture" in UserDefaults to capture raw again.
         let enableRawCapture = UserDefaults.standard.bool(forKey: "enableRawCapture")
         collector = Collector(store: store, deviceId: deviceId,
-                              enableRawCapture: enableRawCapture)
+                              enableRawCapture: enableRawCapture,
+                              log: { [weak self] line in self?.log(line) })
         // The store can finish bootstrapping AFTER connect(model:) already ran (both wait on
         // poweredOn), so apply the family/clock configuration here too — whichever runs last wins.
         configureCollectorFamily()
@@ -1426,6 +1427,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // and tell the router which decoder to use. Fresh per connection so no stale bytes carry over.
         reassembler = Reassembler(family: model.deviceFamily)
         router.family = model.deviceFamily
+        router.deviceId = deviceId   // #1706: attribute this connection's alarm readback
         // Live 5/MG persistence: point the Collector's decode at the selected family and install the
         // identity clock ref for a 5/MG (its live timestamps are already real unix). WHOOP 4.0 keeps
         // the GET_CLOCK correlation flow untouched. Re-applied after bootstrapStore builds the
@@ -4301,6 +4303,7 @@ public final class BLEManager: NSObject, ObservableObject {
         selectedModel = model
         reassembler = Reassembler(family: model.deviceFamily)
         router.family = model.deviceFamily
+        router.deviceId = deviceId   // #1706: attribute this connection's alarm readback
         configureCollectorFamily()
         central.stopScan()
         log("Scanning for \(model.displayName)…")
@@ -4642,6 +4645,9 @@ public final class BLEManager: NSObject, ObservableObject {
     private func recordAlarmArm(sentEpoch: Int) {
         let d = UserDefaults.standard
         d.set(sentEpoch, forKey: "alarm.lastArmSentEpoch")
+        // #1706: WHICH strap this arm went to. Without it the export, and the reject streak, compare
+        // this epoch against a readback that on a multi-strap install may be a different device.
+        d.set(deviceId, forKey: "alarm.lastArmDeviceId")
         d.set(Date().timeIntervalSince1970, forKey: "alarm.lastArmAt")
         d.set(commandChannelReady, forKey: "alarm.lastArmConnected")   // #613: true only if the arm actually went out
         // #34: the strap-clock skew (its own RTC minus wall, seconds) AT THE MOMENT we armed. A wrong RTC
@@ -5444,6 +5450,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         selectedModel = .persisted
         reassembler = Reassembler(family: selectedModel.deviceFamily)
         router.family = selectedModel.deviceFamily
+        router.deviceId = deviceId   // #1706: attribute this connection's alarm readback
         configureCollectorFamily()
         // Collection only runs post-bond, so a restored link was already bonded;
         // seed those flags now. `didWriteValueFor` won't re-fire on its own.
@@ -6180,6 +6187,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     // …but a REAL-TIME physical gesture (double-tap / wrist) must still fire even mid-
                     // offload (#69). Gated on ts≈now so replayed historical EVENTs (old ts) are ignored.
                     router.dispatchLiveGestureIfFresh(frame: frame, now: strapClockNow)
+                    // …and the strap's own console narration, which it emits precisely DURING a sync.
+                    router.mirrorStrapConsoleIfPresent(frame: frame)
                     continue
                 }
                 // #47: decode this live WHOOP4 frame ONCE here and thread the result to every consumer
@@ -6277,6 +6286,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                         // A real-time double-tap / wrist gesture still fires during a 5/MG offload (which
                         // runs for minutes, #69); the ts≈now gate rejects replayed historical EVENTs.
                         router.dispatchLiveGestureIfFresh(frame: frame, now: strapClockNow)
+                        // …and the strap's own console narration, which it emits precisely DURING a sync.
+                        router.mirrorStrapConsoleIfPresent(frame: frame)
                         continue
                     }
                     router.handle(frame: frame)

@@ -300,6 +300,14 @@ struct TodayView: View {
     // 14-day sparkline series, keyed by metric key. Loaded once in .task.
     @State private var sparks: [String: [Double]] = [:]
     @State private var workouts: [WorkoutRow] = []
+    /// #1694: a tapped Latest-Workouts tile. Wrapped so `.sheet(item:)` drives presentation, mirroring
+    /// WorkoutsView's own detail target — the feed was read-only, so the only route to a session's
+    /// detail was More > Workouts.
+    private struct WorkoutDetailTarget: Identifiable {
+        let row: WorkoutRow
+        let id = UUID()
+    }
+    @State private var workoutDetail: WorkoutDetailTarget?
     @State private var appleDays: [AppleDaily] = []
     // Design Reset / #582, the pinned "Your cards" values (Stress / Fitness age / Vitality), surfaced
     // on Today so the buried Explore features sit on the home screen. Loaded in loadAll; nil hides the row.
@@ -1510,6 +1518,20 @@ struct TodayView: View {
                 dashboardCardsRaw: $dashboardCardsRaw,
                 hostedCardsRaw: $hostedCardsRaw
             )
+        }
+        // #1694: the same read-only WorkoutDetailView the Workouts list opens. Nothing here can edit or
+        // delete, so a tap from Today carries no risk that list does not already carry. Rides its own
+        // NavigationStack because these shared screens are not in a per-screen one — mirrors WorkoutsView.
+        .sheet(item: $workoutDetail) { target in
+            NavigationStack {
+                WorkoutDetailView(row: target.row)
+                    .environmentObject(repo)
+            }
+            #if os(iOS)
+            .noopSheetPresentation(largeFirst: true)
+            #else
+            .frame(width: 620, height: 720)
+            #endif
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showLiveSession) {
@@ -3845,22 +3867,45 @@ struct TodayView: View {
 
     // MARK: (c) LAST WORKOUTS, SAME grid, uniform 104pt workout tiles.
 
+    /// Android's Today feed contract (`TodayScreen.recentCutoff`): sessions starting on or after the
+    /// start of the day 13 days back — 14 days counting today. Named rather than inlined so the window
+    /// is one thing on this platform too, and so the parity guard has something to point at.
+    static func recentWorkoutsFeed(_ rows: [WorkoutRow], now: Date = Date()) -> [WorkoutRow] {
+        let cal = Calendar.current
+        guard let cutoff = cal.date(byAdding: .day, value: -13, to: cal.startOfDay(for: now)) else { return rows }
+        let cutoffTs = Int(cutoff.timeIntervalSince1970)
+        return rows.filter { $0.startTs >= cutoffTs }
+    }
+
     @ViewBuilder
     private var workoutsSection: some View {
-        if !workouts.isEmpty {
+        // #1702: window HERE, not on `workouts`. That array is shared — it also feeds the Data Sources
+        // Apple-workout count and the HR chart's sport glyphs, both all-time by design — so windowing it
+        // at the source would silently shrink two unrelated numbers on this same screen.
+        let recent = Self.recentWorkoutsFeed(workouts)
+        if !recent.isEmpty {
             VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                // "14 days" describes the window, like Android's today_workouts_14_days. The old
+                // "\(count) total" counted every workout ever recorded while showing at most six.
                 SectionHeader("Latest Workouts", overline: "Activity",
-                              trailing: String(localized: "\(workouts.count) total"))
+                              trailing: String(localized: "14 days"))
                 LazyVGrid(columns: grid, alignment: .leading, spacing: NoopMetrics.gap) {
-                    ForEach(Array(workouts.prefix(6).enumerated()), id: \.offset) { _, w in
-                        StatTile(
-                            label: "\(WorkoutSource.displaySport(w.sport))",
-                            value: workoutDuration(w),
-                            caption: workoutCaption(w),
-                            accent: StrandPalette.effortTint(fraction: (w.strain ?? 0) / StrainScorer.maxStrain),
-                            delta: w.energyKcal.map { "\(Int($0.rounded())) kcal" },
-                            deltaColor: StrandPalette.metricAmber
-                        )
+                    ForEach(Array(recent.prefix(6).enumerated()), id: \.offset) { _, w in
+                        Button {
+                            workoutDetail = WorkoutDetailTarget(row: w)
+                        } label: {
+                            StatTile(
+                                label: "\(WorkoutSource.displaySport(w.sport))",
+                                value: workoutDuration(w),
+                                caption: workoutCaption(w),
+                                accent: StrandPalette.effortTint(fraction: (w.strain ?? 0) / StrainScorer.maxStrain),
+                                delta: w.energyKcal.map { "\(Int($0.rounded())) kcal" },
+                                deltaColor: StrandPalette.metricAmber
+                            )
+                        }
+                        // The Workouts list's own rows use this, not .plain: it is the iOS twin of
+                        // Android's liquidPress, so the tile settles inward on press on both platforms.
+                        .buttonStyle(LiquidPressStyle())
                     }
                 }
             }
