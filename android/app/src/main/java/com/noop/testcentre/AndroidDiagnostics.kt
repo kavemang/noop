@@ -178,9 +178,9 @@ object AndroidDiagnostics {
                     if (sk.isNotEmpty()) { session = s; skin = sk; break }
                 }
             }
-            val grav = repo.gravitySamples(id, session.startTs, session.endTs, Int.MAX_VALUE)
-            val hr = repo.hrSamples(id, session.startTs, session.endTs, Int.MAX_VALUE)
-            val rr = repo.rrIntervals(id, session.startTs, session.endTs, Int.MAX_VALUE)
+            val grav = repo.gravitySamplesForDevice(id, session.startTs, session.endTs, Int.MAX_VALUE)
+            val hr = repo.hrSamplesForDevice(id, session.startTs, session.endTs, Int.MAX_VALUE)
+            val rr = repo.rrIntervalsForDevice(id, session.startTs, session.endTs, Int.MAX_VALUE)
             val resp = repo.respSamples(id, session.startTs, session.endTs, Int.MAX_VALUE)
             add("Night ${dayStamp(session.startTs)}: grav=${grav.size} hr=${hr.size} rr=${rr.size} resp=${resp.size} skin=${skin.size}")
             if (grav.isEmpty() && hr.isEmpty()) {
@@ -416,8 +416,129 @@ object AndroidDiagnostics {
     suspend fun dynamicLines(context: Context): List<String> =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             strapAndDataLines(context) + funnelLines(context) + workoutSourceLines(context) +
-                dailyDataLines(context) + alarmLines(context)
+                dailyDataLines(context) + alarmLines(context) + circadianLines(context)
         }
+
+    /**
+     * One-decimal float, always with a DOT.
+     *
+     * This file already pins `Locale.US` for its dates, for the same reason: the strap log is pasted into
+     * issues and read by whoever picks them up, so a device in a comma-decimal locale must not emit
+     * "4,7 bpm" beside US-formatted timestamps. Kotlin's `"%.1f".format(x)` uses the default locale and
+     * would do exactly that.
+     */
+    private fun fmt1(v: Double): String = String.format(java.util.Locale.US, "%.1f", v)
+
+    /** Hourly HR buckets over the 14-day window below which the profile is not pooled at all. Mirrors
+     *  `circadianBinsFrom`'s own floor — kept here so the diagnostic names the real number, not a guess. */
+    internal const val CIRCADIAN_MIN_BUCKETS = 24
+    /** Distinct populated local hours below which no estimate is attempted.
+     *
+     *  REFERENCES the engine's own constant rather than repeating its value. A diagnostic that prints
+     *  "needs 6" while the code requires 8 would send whoever reads the log after the wrong thing —
+     *  the one failure mode this section exists to prevent. */
+    internal val CIRCADIAN_MIN_HOURS get() = com.noop.analytics.V5HealthSignals.MIN_CIRCADIAN_BINS
+
+    /**
+     * Which gate the body clock is failing.
+     *
+     * The first two are sequential gates and are reported in the order they run. The last two are a
+     * SINGLE condition in the engine (`daysObserved < minDaysForFit || relativeAmplitude <
+     * minRelativeAmplitude`), split apart here because "unreadable" on its own does not say whether to
+     * keep wearing the strap or to question the threshold — and those lead somewhere different.
+     *
+     * The card vanishes for two DIFFERENT reasons that look identical on screen: below the bucket floor
+     * or the hour floor there is NO estimate at all (`V5HealthSignals` returns null and the card's `?.let`
+     * skips it), while a thin or flat fit still returns an estimate marked UNREADABLE, which DOES draw a
+     * card with its own copy. Without this line those are indistinguishable from the outside — the report
+     * that prompted it had a body clock missing on both the Health card and the Sleep dial with no way to
+     * say which floor was short.
+     *
+     * Pure so the wording is assertable without a store, matching `noCaptureMsgText`.
+     */
+    internal fun circadianVerdict(
+        buckets: Int,
+        populatedHours: Int,
+        daysObserved: Int,
+        relativeAmplitude: Double?,
+        amplitudeBpm: Double? = null,
+    ): String = when {
+        buckets < CIRCADIAN_MIN_BUCKETS ->
+            "no estimate — $buckets hourly HR buckets in 14d, needs $CIRCADIAN_MIN_BUCKETS"
+        populatedHours < CIRCADIAN_MIN_HOURS ->
+            "no estimate — HR lands in $populatedHours of 24 local hours, needs $CIRCADIAN_MIN_HOURS"
+        // Mirrors the engine's OR: a swing passes on the proportional test or on the absolute one. Read
+        // the two apart and this line starts reporting "too flat" for rhythms the engine accepts.
+        relativeAmplitude != null &&
+            relativeAmplitude < com.noop.analytics.CircadianEngine.minRelativeAmplitude &&
+            (amplitudeBpm ?: 0.0) < com.noop.analytics.CircadianEngine.minAbsoluteAmplitudeBpm ->
+            "unreadable — rhythm too flat (amplitude ${fmt1(relativeAmplitude * 100)}% of mesor, " +
+                "needs ${fmt1(com.noop.analytics.CircadianEngine.minRelativeAmplitude * 100)}% or " +
+                "${fmt1(com.noop.analytics.CircadianEngine.minAbsoluteAmplitudeBpm)} bpm)"
+        daysObserved < com.noop.analytics.CircadianEngine.minDaysForFit ->
+            "unreadable — $daysObserved days observed, needs " +
+                "${com.noop.analytics.CircadianEngine.minDaysForFit}"
+        // SOLID needs BOTH axes, exactly as estimatePhase assigns it. Reading only the days here printed
+        // "solid" for a wearer the engine had marked WIDE — the diagnostic contradicting the very screen
+        // it exists to explain, which is the one thing this section must never do.
+        daysObserved < com.noop.analytics.CircadianEngine.goodDaysForFit ->
+            "wide — $daysObserved days observed"
+        relativeAmplitude != null &&
+            relativeAmplitude < com.noop.analytics.CircadianEngine.minRelativeAmplitude ->
+            "wide — $daysObserved days observed, but the swing clears only the absolute floor " +
+                "(${fmt1(relativeAmplitude * 100)}% of mesor)"
+        else -> "solid — $daysObserved days observed"
+    }
+
+    /**
+     * The body clock's three inputs, RECOMPUTED from the store.
+     *
+     * It reports what `estimatePhase` WOULD return for the data on disk — not what `_v5Signals.bodyClock`
+     * is currently holding. Those can diverge: a cached-bins staleness once nulled the live estimate on a
+     * device whose store was fine, and against that failure this section would have printed a confident
+     * verdict beside a missing card, misleading exactly as the silence it replaced did. So a verdict here
+     * that disagrees with the screen is itself the finding — it means the snapshot, not the data, is wrong.
+     *
+     * Hours and days are counted from the RAW buckets rather than from `circadianBinsFrom`, which
+     * short-circuits to empty below the bucket floor — reporting its zeros would hide the very numbers
+     * this line exists to show.
+     */
+    suspend fun circadianLines(context: Context): List<String> = buildList {
+        add("─".repeat(40))
+        add("Body clock inputs (recomputed from the store, not the live snapshot)")
+        runCatching {
+            val repo = com.noop.data.WhoopRepository.from(context)
+            val active = runCatching {
+                (context.applicationContext as com.noop.NoopApplication).activeDeviceId
+            }.getOrNull() ?: "unknown"
+            val nowMs = System.currentTimeMillis()
+            val now = nowMs / 1000L
+            val tz = java.util.TimeZone.getDefault().getOffset(nowMs) / 1000L
+            val buckets = repo.hrBucketsUnion(active, now - 14L * 86_400L, now, 3_600L)
+            val hours = buckets.map { (((it.bucket + tz) % 86_400L + 86_400L) % 86_400L / 3_600L) }
+                .distinct().size
+            val days = buckets.map { (it.bucket + tz) / 86_400L }.distinct().size
+            val bins = com.noop.ui.circadianBinsFrom(buckets, tz).first
+            val fit = com.noop.analytics.CircadianEngine.cosinor(bins)
+            val amp = fit?.let { f ->
+                if (f.mesor != 0.0) f.amplitude / kotlin.math.abs(f.mesor) else 0.0
+            }
+            add("Source: $active (+ imported)  window: last 14d")
+            add("Buckets: ${buckets.size} (floor $CIRCADIAN_MIN_BUCKETS)  " +
+                "hours: $hours/24 (need $CIRCADIAN_MIN_HOURS)  days: $days " +
+                "(need ${com.noop.analytics.CircadianEngine.minDaysForFit})")
+            // The ratio alone is not interpretable — "7.3% of mesor" says nothing about whether the
+            // rhythm is genuinely flat or the bar is simply set high for this wearer. The absolute pair is
+            // what makes the threshold arguable, and it is what `minRelativeAmplitude`'s own note asks for
+            // ("it needs a wearer whose amplitude is disproportionately small for their mesor").
+            if (fit != null) {
+                add("Rhythm: amplitude ${fmt1(fit.amplitude)} bpm on a " +
+                    "${fmt1(fit.mesor)} bpm mesor  (acrophase " +
+                    "${fmt1(fit.acrophaseHours)}h)")
+            }
+            add("Verdict: " + circadianVerdict(buckets.size, hours, days, amp, fit?.amplitude))
+        }.onFailure { add("  (unavailable: ${it.message})") }
+    }
 
     /** "3h 12m ago" style relative stamp for a positive age in ms. */
     private fun relTime(deltaMs: Long): String {

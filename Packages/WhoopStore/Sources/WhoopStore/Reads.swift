@@ -216,7 +216,7 @@ extension WhoopStore {
     public func rrIntervals(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [RRInterval] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, rrMs, srcChannel, ord FROM rrInterval
+                SELECT ts, rrMs, srcChannel, ord, seq FROM rrInterval
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
                 AND (srcChannel IS NULL OR srcChannel <> ?)
                 AND (tsSuspect IS NULL OR tsSuspect <> 1)   -- #1073: exclude future-stamped beats
@@ -225,7 +225,7 @@ extension WhoopStore {
                 .map { row in
                     RRInterval(ts: row["ts"], rrMs: row["rrMs"],
                                srcChannel: (row["srcChannel"] as Int?).flatMap(RRSourceChannel.init(rawValue:)),
-                               ord: row["ord"] as Int?)
+                               ord: row["ord"] as Int?, seq: row["seq"])
                 }
         }
     }
@@ -397,7 +397,7 @@ extension WhoopStore {
             let rawTables = ["hrSample", "rrInterval", "event", "battery",
                              "spo2Sample", "skinTempSample", "respSample", "gravitySample",
                              "stepSample", "ppgHrSample", "sleepStateSample", "ppgWaveformSample",
-                             "rawImuSample", "v18AuxSample"]
+                             "v18AuxSample"]
             var decoded = 0
             for t in rawTables {
                 decoded += try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)") ?? 0
