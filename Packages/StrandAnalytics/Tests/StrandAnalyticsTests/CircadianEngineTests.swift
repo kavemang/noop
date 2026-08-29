@@ -151,4 +151,104 @@ final class CircadianEngineTests: XCTestCase {
         XCTAssertNotEqual(confidence(mesor: 45, amp: 5), .unreadable)   // 0.111
         XCTAssertEqual(confidence(mesor: 45, amp: 4), .unreadable)      // 0.089
     }
+
+    // MARK: - chronotype lean (absolute phase, not schedule-relative)
+
+    /// The boundaries and the circular case, asserted from this side too so the agreement is pinned on
+    /// both platforms rather than only in the Kotlin oracle. `late-evening-wrap` is the row that matters:
+    /// 23:30 is five hours BEFORE the 04:30 anchor, so it is a strong MORNING lean — a naive
+    /// `23.5 > 5.5` bucket would call it evening.
+    func testChronotypeBucketsAbsolutePhaseCircularly() {
+        XCTAssertEqual(CircadianEngine.chronotypeAnchorHour, 4.5, accuracy: 0,
+                       "the anchor is derived from the engine's own constants, not hardcoded")
+        let cases: [(Double, CircadianEngine.Chronotype)] = [
+            (4.5, .intermediate), (3.5, .intermediate), (3.49, .morning),
+            (5.5, .intermediate), (5.51, .evening),
+            (23.5, .morning), (0.0, .morning), (12.0, .evening),
+            (16.5, .evening), (16.4, .evening), (16.6, .morning),
+            (28.5, .intermediate), (-1.0, .morning),
+        ]
+        for (hour, expected) in cases {
+            XCTAssertEqual(CircadianEngine.chronotype(tempMinHour: hour), expected,
+                           "tempMinHour \(hour)")
+        }
+    }
+
+    /// A NAMED category reads as a fact about the person rather than a reading of the week, so it waits
+    /// for the strongest tier — unlike the continuous offset the card already shows at `.wide`.
+    func testChronotypeIsNamedOnlyForASolidFit() {
+        func estimate(_ confidence: CircadianEngine.PhaseConfidence) -> CircadianEngine.PhaseEstimate {
+            CircadianEngine.PhaseEstimate(tempMinHour: 23.5, acrophaseHours: 11.5,
+                                          offsetVsScheduleMinutes: 0, confidence: confidence, note: "")
+        }
+        XCTAssertEqual(CircadianEngine.chronotype(estimate(.solid)), .morning)
+        XCTAssertNil(CircadianEngine.chronotype(estimate(.wide)),
+                     "a thin fit must not name a chronotype")
+        XCTAssertNil(CircadianEngine.chronotype(estimate(.unreadable)))
+    }
+
+    /// The schedule-relative offset CANNOT name a chronotype, which is why this buckets the absolute
+    /// phase instead. A consistent 03:00-11:00 sleeper is well aligned with their OWN schedule — offset
+    /// ~0 — while being strongly evening-type by the clock.
+    func testConsistentLateSleeperIsEveningTypeDespiteAZeroScheduleOffset() {
+        let alignedButLate = CircadianEngine.PhaseEstimate(
+            tempMinHour: 8.0, acrophaseHours: 20.0, offsetVsScheduleMinutes: 0,
+            confidence: .solid, note: "")
+        XCTAssertEqual(CircadianEngine.chronotype(alignedButLate), .evening)
+    }
+
+    /// The same table the Kotlin oracle pins, asserted from this side too. `typical` says the model is
+    /// sane: a 04:30 temperature minimum and an 8 h night put the ideal window at 23:00-07:00. The wrap
+    /// rows matter because the ideal bedtime routinely lands on the PREVIOUS day.
+    func testIdealSleepWindowPlacesTheWindowOnTheRing() {
+        let cases: [(Double, Double, (Double, Double)?)] = [
+            (4.5, 8.0, (23.0, 7.0)), (4.5, 5.0, (2.0, 7.0)), (4.5, 10.0, (21.0, 7.0)),
+            (7.0, 8.0, (1.5, 9.5)), (2.0, 8.0, (20.5, 4.5)),
+            (1.0, 8.0, (19.5, 3.5)), (23.0, 8.0, (17.5, 1.5)),
+            (4.5, 0.0, nil), (4.5, -1.0, nil), (4.5, 24.0, nil),
+        ]
+        for (tempMin, duration, expected) in cases {
+            let w = CircadianEngine.idealSleepWindow(tempMinHour: tempMin, durationHours: duration)
+            if let expected {
+                XCTAssertEqual(w?.bedHour ?? -1, expected.0, accuracy: 1e-12, "bed for \(tempMin)/\(duration)")
+                XCTAssertEqual(w?.wakeHour ?? -1, expected.1, accuracy: 1e-12, "wake for \(tempMin)/\(duration)")
+            } else {
+                XCTAssertNil(w, "an impossible duration cannot be placed on the ring: \(duration)")
+            }
+        }
+    }
+
+    /// The ideal arc takes the night's OWN length, so the dial compares PHASE alone — which keeps a sleep
+    /// DEBT from rendering as a body-clock problem.
+    func testIdealWindowSharesTheWakeAnchorAcrossDurations() {
+        let short = CircadianEngine.idealSleepWindow(tempMinHour: 4.5, durationHours: 5)
+        let long = CircadianEngine.idealSleepWindow(tempMinHour: 4.5, durationHours: 10)
+        XCTAssertEqual(short?.wakeHour, long?.wakeHour)
+        XCTAssertNotEqual(short?.bedHour, long?.bedHour)
+    }
+
+    /// The dial's caption quantity. `wrap-late` earns its place: a 23:00 temperature minimum puts the
+    /// ideal wake at 01:30, so waking at 02:30 is one hour LATE, not twenty-three hours early.
+    func testSleepWindowOffsetHours() {
+        let cases: [(Double, Double, Double)] = [
+            (4.5, 7.0, 0.0), (4.5, 8.0, 1.0), (4.5, 6.0, -1.0),
+            (23.0, 2.5, 1.0), (1.0, 23.0, -4.5), (4.5, 19.0, 12.0),
+        ]
+        for (tempMin, wake, expected) in cases {
+            XCTAssertEqual(CircadianEngine.sleepWindowOffsetHours(tempMinHour: tempMin, actualWakeHour: wake),
+                           expected, accuracy: 1e-12, "tempMin \(tempMin) wake \(wake)")
+        }
+    }
+
+    /// The dial's caption and the card's existing headline measure DIFFERENT things: a consistent late
+    /// sleeper is well-aligned with their own schedule while sleeping hours from what their clock wants.
+    func testWindowOffsetAndScheduleOffsetAreDifferentQuantities() {
+        let windowOffset = CircadianEngine.sleepWindowOffsetHours(tempMinHour: 8.0, actualWakeHour: 6.5)
+        XCTAssertEqual(windowOffset, -4.0, accuracy: 1e-12)
+        let scheduleAligned = CircadianEngine.PhaseEstimate(
+            tempMinHour: 8.0, acrophaseHours: 20.0, offsetVsScheduleMinutes: 0,
+            confidence: .solid, note: "")
+        XCTAssertEqual(scheduleAligned.offsetVsScheduleMinutes, 0)
+        XCTAssertGreaterThan(abs(windowOffset), 1.0)
+    }
 }

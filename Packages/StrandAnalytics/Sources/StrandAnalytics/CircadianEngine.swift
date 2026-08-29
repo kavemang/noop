@@ -48,6 +48,20 @@ public enum CircadianEngine {
     /// Activity acrophase (peak activity) sits roughly this many hours after CBTmin in a typical day — the
     /// offset used to convert the cosinor acrophase into an estimated temperature-minimum time.
     public static let acrophaseAfterCbtMinHours: Double = 12.0
+    /// Population-typical wake hour, used ONLY to place the chronotype reference point.
+    ///
+    /// `offsetVsScheduleMinutes` compares the clock to the USER'S OWN schedule, so it cannot name a
+    /// chronotype: someone reliably asleep 03:00-11:00 has an offset near zero and would read
+    /// "intermediate" while being strongly evening-type. A named lean needs an ABSOLUTE phase, so it is
+    /// bucketed from `tempMinHour` against a population reference instead.
+    public static let chronotypeReferenceWakeHour: Double = 7.0
+    /// Half-width of the "intermediate" band around the reference CBTmin, in hours.
+    ///
+    /// Deliberately wide. `tempMinHour` is derived from an activity cosinor (`acrophase - 12 h`) unless a
+    /// measured `observedTempMinHour` is supplied, and NO production caller supplies one today — so this
+    /// is a lean inferred from movement, not a thermal measurement. A one-hour band either side keeps the
+    /// three buckets coarse enough to be honest about that.
+    public static let chronotypeBandHours: Double = 1.0
 
     // MARK: - Inputs
 
@@ -320,6 +334,86 @@ public enum CircadianEngine {
         var x = h.truncatingRemainder(dividingBy: 24.0)
         if x < 0 { x += 24.0 }
         return x
+    }
+
+    /// A coarse, ABSOLUTE body-clock category: where the temperature minimum sits on the clock.
+    ///
+    /// NOT the "chronotype lean" wording used elsewhere. `estimatePhase` builds a `lean` string from
+    /// `offsetVsScheduleMinutes` ("a night-owl lean"), and the v5 skin-temp design spec defines chronotype
+    /// lean as "earlier/later than your sleep schedule implies" — both RELATIVE to the wearer's own
+    /// schedule. This is relative to the CLOCK, and the two genuinely disagree: a consistent 03:00-11:00
+    /// sleeper is well-aligned by the relative read and `.evening` by this one. Keep the vocabularies
+    /// disjoint in anything user-facing, or the two readings look like a contradiction (#1409).
+    ///
+    /// Three buckets, not a score: the underlying phase estimate is an activity fit, and a finer grain
+    /// would imply precision it does not have.
+    public enum Chronotype: String, Equatable, Sendable, Codable {
+        case morning        // CBTmin earlier than the population reference
+        case intermediate
+        case evening        // CBTmin later than the population reference
+    }
+
+    /// The reference CBTmin clock hour a lean is measured against: the population wake hour minus the
+    /// same `cbtMinBeforeWakeHours` the phase estimator already uses, so the anchor moves with the
+    /// engine's own model rather than being a second, independently-drifting constant.
+    public static var chronotypeAnchorHour: Double {
+        wrap24(chronotypeReferenceWakeHour - cbtMinBeforeWakeHours)
+    }
+
+    /// The chronotype-ideal sleep window for a night of `durationHours`, as clock hours.
+    ///
+    /// Anchored on the temperature minimum: a well-entrained sleeper wakes about `cbtMinBeforeWakeHours`
+    /// after CBTmin, so the ideal wake is `tempMinHour + cbtMinBeforeWakeHours` and the ideal bedtime is
+    /// that minus the night's own length.
+    ///
+    /// USING THE ACTUAL DURATION IS THE POINT. Giving the ideal arc the same length as the real one makes
+    /// the comparison purely about PHASE — did you sleep at the right TIME — so a short night reads as
+    /// aligned-but-short rather than as misaligned. Feeding a "needed" duration instead would fold two
+    /// different failures into one arc and make a debt look like a body-clock problem.
+    ///
+    /// nil for a non-positive or impossible duration; a window longer than a day cannot be placed on a
+    /// 24 h ring, and silently wrapping it would draw a full circle that means nothing.
+    public static func idealSleepWindow(tempMinHour: Double,
+                                        durationHours: Double) -> (bedHour: Double, wakeHour: Double)? {
+        guard durationHours > 0, durationHours < 24 else { return nil }
+        let wake = wrap24(tempMinHour + cbtMinBeforeWakeHours)
+        return (bedHour: wrap24(wake - durationHours), wakeHour: wake)
+    }
+
+    /// Signed hours the ACTUAL sleep window sits later (+) or earlier (−) than the chronotype-ideal one.
+    ///
+    /// Deliberately NOT `offsetVsScheduleMinutes`. That field compares the body clock to the wearer's own
+    /// SCHEDULE; this compares the night actually slept to where the CLOCK wanted it. A dial that draws an
+    /// actual arc against an ideal arc must caption itself with the distance between those two arcs, or
+    /// the number contradicts the picture — the two disagree exactly when someone keeps a consistent
+    /// schedule that does not suit their clock, which is the case the dial exists to show.
+    ///
+    /// Anchored on wake rather than bedtime because `idealSleepWindow` builds the ideal window from the
+    /// wake end; comparing bedtimes would fold the night's DURATION into a phase reading.
+    public static func sleepWindowOffsetHours(tempMinHour: Double, actualWakeHour: Double) -> Double {
+        signedHourDelta(from: wrap24(tempMinHour + cbtMinBeforeWakeHours), to: wrap24(actualWakeHour))
+    }
+
+    /// Bucket an ABSOLUTE temperature-minimum clock hour into a lean.
+    ///
+    /// Compared CIRCULARLY. A `tempMinHour` of 23:30 is five hours BEFORE the 04:30 anchor — a strong
+    /// morning lean — and a naive `23.5 > 5.5` would call it evening instead. Pure, so the boundaries are
+    /// assertable without building a fit.
+    public static func chronotype(tempMinHour: Double) -> Chronotype {
+        let delta = signedHourDelta(from: chronotypeAnchorHour, to: wrap24(tempMinHour))
+        if delta < -chronotypeBandHours { return .morning }
+        if delta > chronotypeBandHours { return .evening }
+        return .intermediate
+    }
+
+    /// The lean for a phase estimate, or nil when the fit is not strong enough to name one.
+    ///
+    /// Gated to `.solid` on purpose. `.wide` is a real fit on thin data and is fine for the continuous
+    /// offset the card already shows, but a NAMED category reads as a fact about the person rather than a
+    /// reading of the week, so it waits for the stronger tier. `.unreadable` never names one.
+    public static func chronotype(_ estimate: PhaseEstimate) -> Chronotype? {
+        guard estimate.confidence == .solid else { return nil }
+        return chronotype(tempMinHour: estimate.tempMinHour)
     }
 
     /// Signed shortest delta in hours from `a` to `b` on the 24 h clock, in (−12, 12].

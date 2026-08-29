@@ -2571,4 +2571,17 @@
     <string name="l10n_settings_screen_once_a_day_noop_asks_github_5683aad3">Once a day, NOOP asks GitHub for the latest version number and puts a note in Updates if there’s a newer one. Nothing about you is sent, and it never installs anything.</string>
     <string name="l10n_updates_noop_1s_is_available_05d8ef55">NOOP %1$s is available</string>
     <string name="l10n_updates_youre_on_1s_open_settings_and_35b9e135">You\'re on %1$s. Open Settings and use Check for updates to see what\'s new and download %2$s.</string>
+    <string name="crash_recovery_title">NOOP stopped unexpectedly</string>
+    <string name="crash_recovery_body">The last crash is shown below. You can copy it for a bug report, then try opening the app again.</string>
+    <string name="crash_recovery_copy">Copy error</string>
+    <string name="crash_recovery_continue">Try opening NOOP</string>
+    <string name="l10n_body_clock_dial_card_body_clock_b0b9b988">Body clock</string>
+    <string name="l10n_body_clock_dial_card_last_night_against_your_clock_9183a37c">Last night against your clock</string>
+    <string name="l10n_body_clock_dial_card_in_sync_with_your_body_clock_4b5181c8">In sync with your body clock</string>
+    <string name="l10n_body_clock_dial_card_1_s_later_than_your_body_50b7d966">%1$s later than your body clock</string>
+    <string name="l10n_body_clock_dial_card_1_s_earlier_than_your_body_68877f50">%1$s earlier than your body clock</string>
+    <string name="l10n_body_clock_dial_card_morning_type_289dd7bf">Morning type</string>
+    <string name="l10n_body_clock_dial_card_intermediate_type_a7b6b74c">Intermediate type</string>
+    <string name="l10n_body_clock_dial_card_evening_type_3e1ce111">Evening type</string>
+    <string name="l10n_body_clock_dial_card_body_clock_dial_03cdbc31">Body clock dial</string>
 </resources>

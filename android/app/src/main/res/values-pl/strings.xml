@@ -2549,4 +2549,17 @@
     <string name="l10n_settings_screen_once_a_day_noop_asks_github_5683aad3">Raz dziennie NOOP pyta GitHub o numer najnowszej wersji i dodaje notatkę w Aktualizacjach, jeśli jest nowsza. Nic o tobie nie jest wysyłane i nic nigdy nie jest instalowane.</string>
     <string name="l10n_updates_noop_1s_is_available_05d8ef55">NOOP %1$s jest dostępny</string>
     <string name="l10n_updates_youre_on_1s_open_settings_and_35b9e135">Masz wersję %1$s. Otwórz Ustawienia i użyj opcji Sprawdź aktualizacje, aby zobaczyć nowości i pobrać %2$s.</string>
+    <string name="crash_recovery_title">NOOP nieoczekiwanie się zatrzymał</string>
+    <string name="crash_recovery_body">Poniżej znajduje się ostatni błąd. Możesz go skopiować do zgłoszenia, a następnie spróbować ponownie otworzyć aplikację.</string>
+    <string name="crash_recovery_copy">Kopiuj błąd</string>
+    <string name="crash_recovery_continue">Spróbuj otworzyć NOOP</string>
+    <string name="l10n_body_clock_dial_card_body_clock_b0b9b988">Zegar biologiczny</string>
+    <string name="l10n_body_clock_dial_card_last_night_against_your_clock_9183a37c">Ostatnia noc a Twój zegar biologiczny</string>
+    <string name="l10n_body_clock_dial_card_in_sync_with_your_body_clock_4b5181c8">Zgodnie z zegarem biologicznym</string>
+    <string name="l10n_body_clock_dial_card_1_s_later_than_your_body_50b7d966">%1$s później niż Twój zegar biologiczny</string>
+    <string name="l10n_body_clock_dial_card_1_s_earlier_than_your_body_68877f50">%1$s wcześniej niż Twój zegar biologiczny</string>
+    <string name="l10n_body_clock_dial_card_morning_type_289dd7bf">Typ poranny</string>
+    <string name="l10n_body_clock_dial_card_intermediate_type_a7b6b74c">Typ pośredni</string>
+    <string name="l10n_body_clock_dial_card_evening_type_3e1ce111">Typ wieczorny</string>
+    <string name="l10n_body_clock_dial_card_body_clock_dial_03cdbc31">Tarcza zegara biologicznego</string>
 </resources>
