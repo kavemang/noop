@@ -82,10 +82,14 @@ class StalledLinkDiagnosticsTest {
         val off = helloDeferredByExplicitBondLine(3, overrideOptedIn = false, overrideAttempts = 0)
         val on = helloDeferredByExplicitBondLine(3, overrideOptedIn = true, overrideAttempts = 2)
         val spent = helloDeferredByExplicitBondLine(3, overrideOptedIn = true, overrideAttempts = 6)
-        assertTrue(off.contains("override off"))
-        assertTrue(on.contains("override on (2/6 used)"))
-        assertTrue(spent.contains("override SPENT (6/6)"))
+        assertTrue(off.contains("experiment ON, hello override off"))
+        assertTrue(on.contains("experiment ON, hello override on (2/6 used)"))
+        assertTrue(spent.contains("experiment ON, hello override SPENT (6/6)"))
         assertFalse("a spent override must not read as active", spent.contains("override on ("))
+        // The sentence names the EXPERIMENT; the parenthetical must not report only the OTHER switch.
+        for (line in listOf(off, on, spent)) {
+            assertTrue("both switches must be named: $line", line.contains("experiment ON"))
+        }
     }
 
     /** The boundary is the cap itself: the attempt that spends the budget is the last permitted one. */
@@ -172,6 +176,29 @@ class StalledLinkDiagnosticsTest {
         val many = liveInsertFailedLine("live-standard", "SQLiteFullException", "database or disk is full", 12, 13, 9)
         assertTrue(many.contains("9 consecutive failures"))
         assertTrue(many.contains("not recovering them"))
+    }
+
+    /**
+     * Whole-line equality against the SAME literal the Swift `LivePersistTraceTests` pins, not `contains`.
+     * The two platforms emit this line into logs meant to be read beside each other, and every
+     * `contains` check above would still pass with a stray space or a moved clause. This is the
+     * assertion that actually holds them together.
+     */
+    @Test
+    fun `the whole line matches the Swift rendering byte for byte`() {
+        assertEquals(
+            "Live persist FAILED on live-standard — SQLiteFullException: database or disk is full" +
+                " (hr=12 rr=13). 9 consecutive failures — these rows are not landing and the re-buffer" +
+                " is not recovering them.",
+            liveInsertFailedLine("live-standard", "SQLiteFullException", "database or disk is full",
+                                 hrFrames = 12, rrFrames = 13, consecutiveFailures = 9),
+        )
+        assertEquals(
+            "Live persist FAILED on live-realtime — IllegalStateException (hr=0 rr=4)." +
+                " Re-buffered for the next cadence.",
+            liveInsertFailedLine("live-realtime", "IllegalStateException", null,
+                                 hrFrames = 0, rrFrames = 4, consecutiveFailures = 1),
+        )
     }
 
     /** The message distinguishes the useful cases; the class alone rarely does. */
@@ -269,11 +296,37 @@ class StalledLinkDiagnosticsTest {
             .substringBefore("\n    }")
         val call = fn.indexOf("val ok = safeGatt(\"writeClientHello\")")
         val claim = fn.indexOf("helloWrittenThisLink = true")
-        val run = fn.indexOf("helloDeferredConsecutive = 0")
+        val run = fn.indexOf("setHelloDeferredRun(0)")   // -1 once the write no longer clears it
         assertTrue("writeClientHello must call safeGatt", call >= 0)
         assertTrue("the write must be claimed, somewhere", claim >= 0)
         assertTrue("helloWrittenThisLink must be set AFTER the stack accepts", claim > call)
-        assertTrue("the deferral run must only be cleared AFTER the stack accepts", run > call)
+        // The run must NOT be cleared here at all any more. A written-but-unacked hello is not a working
+        // handshake, and clearing on the write reset the count on every watchdog bounce - so the strap
+        // alternated defer/write/bounce indefinitely instead of letting the #1635 suppression latch bound
+        // the attempts. Only a genuine bond ends the run.
+        assertEquals("writeClientHello must not clear the deferral run", -1, run)
+    }
+
+    /**
+     * The deferral run must SURVIVE a process restart, which is the only reason it is in
+     * SharedPreferences rather than a field. A field log is usually exported well after the restart that
+     * would have reset it, and a run of 1 prints "expected on the connect that asks" - the opposite of
+     * the truth for a strap that has never once completed a handshake. Field-backed, that read is exactly
+     * what the first version of this got wrong.
+     */
+    @Test
+    fun `the deferral run is persisted rather than held in memory`() {
+        val src = clientSource()
+        assertTrue("the run must be READ from prefs at the deferral site",
+                   src.contains("val deferralRun = helloDeferredRun() + 1"))
+        assertTrue("and written straight back", src.contains("setHelloDeferredRun(deferralRun)"))
+        assertTrue("the line must report the persisted value", src.contains("consecutive = deferralRun,"))
+        // Cleared exactly where the run genuinely ends: a hello that went out, and a genuine bond.
+        assertTrue(src.contains("setHelloDeferredRun(0)        // the handshake works on this strap"))
+        // ...and NOT in reset(), which runs on every disconnect and would defeat the whole point.
+        val resetBody = src.substringAfter("private fun reset() {").substringBefore("\n    }")
+        assertFalse("reset() must not clear the cross-connection run",
+                    resetBody.contains("setHelloDeferredRun"))
     }
 
     @Test
