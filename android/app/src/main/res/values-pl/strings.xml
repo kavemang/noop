@@ -11,6 +11,14 @@
     <string name="nav_live">Na żywo</string>
     <string name="nav_intervals">Interwały</string>
     <string name="nav_sleep">Sen</string>
+    <string name="sleep_status_calculating_title">Obliczanie snu z ostatniej nocy…</string>
+    <string name="sleep_status_calculating_body">Historia z opaski jest już dostępna. NOOP wykrywa i analizuje teraz noc.</string>
+    <string name="sleep_status_sync_failed_title">Sen z ostatniej nocy nie został zsynchronizowany</string>
+    <string name="sleep_status_sync_failed_body">Synchronizacja historii zatrzymała się przed ukończeniem. Trzymaj opaskę w pobliżu i spróbuj ponownie.</string>
+    <string name="sleep_status_waiting_title">Oczekiwanie na sen z ostatniej nocy</string>
+    <string name="sleep_status_waiting_body">Połącz opaskę i zsynchronizuj jej historię. NOOP obliczy noc po otrzymaniu danych nocnych.</string>
+    <string name="sleep_status_not_detected_title">Nie wykryto snu z ostatniej nocy</string>
+    <string name="sleep_status_not_detected_body">Synchronizacja zakończyła się, ale NOOP nie zdołał wiarygodnie określić okna snu. Pozostaw opaskę połączoną i zsynchronizuj ponownie; starsza noc poniżej nadal jest ostatnim wykrytym snem.</string>
     <string name="nav_breathe">Oddychać</string>
     <string name="nav_stress">Stres</string>
     <string name="nav_workouts">Treningi</string>
@@ -2637,4 +2645,5 @@
     <string name="l10n_body_clock_dial_card_body_clock_dial_03cdbc31">Tarcza zegara biologicznego</string>
     <string name="l10n_body_clock_dial_card_last_night_6eaba4dd">Ostatnia noc</string>
     <string name="l10n_body_clock_dial_card_your_clock_1b91f5ee">Twój zegar</string>
+    <string name="vo2max_method_change_caption">Linia jest przerwana tam, gdzie metoda szacowania zmieniła się lub nie została zapisana.</string>
 </resources>

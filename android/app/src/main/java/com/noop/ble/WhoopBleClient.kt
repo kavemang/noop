@@ -187,6 +187,9 @@ data class LiveState(
     /** True while a historical offload session is running, so screens can say "Syncing strap
      *  history…" instead of presenting half-loaded data as final (#77). */
     val backfilling: Boolean = false,
+    /** True while a post-history scoring pass is turning the newly stored raw streams into sleep and
+     * daily metrics. Kept separate from [backfilling] so Sleep can distinguish downloading from calculating. */
+    val analyzingHistory: Boolean = false,
     /** Chunks acked during the current offload session — an honest progress signal (total pending is
      *  unknowable from the protocol, so no percent). Republished every ~10 chunks: the foreground
      *  service re-posts its notification on EVERY LiveState emission, so per-chunk would spam it. */
@@ -2375,6 +2378,44 @@ class WhoopBleClient(
      *  can be reported with an elapsed time. 0 means none is outstanding. Cleared in [reset]. */
     @Volatile private var clientHelloWriteAtMs: Long = 0L
 
+    /** Was a CLIENT_HELLO actually WRITTEN on this link? Distinct from [clientHelloWriteAtMs], which is
+     *  cleared the moment the write completes: this stays true for the rest of the connection so a later
+     *  backfill deferral can say whether the handshake was ever reachable. Cleared in [reset]. */
+    @Volatile private var helloWrittenThisLink = false
+
+    /** Consecutive connects that deferred the hello to the pairing experiment without writing one.
+     *  Deliberately NOT cleared in [reset] — the whole point is that it survives the connection, since
+     *  one deferral is the experiment working and a run of them is the permanent SMP-0x05 state. Reset
+     *  when a hello is written or a genuine bond is reached. Per app process, like the override budget. */
+    @Volatile private var helloDeferredConsecutive = 0
+
+    /** Whether the deferral's full guidance paragraph has been printed for the CURRENT run. The deferral
+     *  fires once per connect on a path documented to loop (57 cycles in an hour, see [HelloSuppression]),
+     *  so the paragraph is one-shot per run and later connects log a terse countable line instead. Same
+     *  latch idiom as [helloOverrideExhaustedLogged]. Cleared wherever [helloDeferredConsecutive] is. */
+    @Volatile private var helloDeferredGuidanceLogged = false
+
+    /** How many times [beginBackfill] has declined on this link, so repeats carry a count instead of
+     *  reading as new information each time. Cleared in [reset]. */
+    @Volatile private var backfillDeferralsThisLink = 0
+
+    /** Consecutive live-persist failures per transport, and when each last reported. The live cadence is
+     *  seconds, so the lines are rate-limited; the COUNT is what separates a transient the re-buffer
+     *  absorbs from a store that is never going to accept these rows.
+     *
+     *  Kept PER TRANSPORT because the standard 0x2A37 path and the puffin REALTIME_DATA path (#1118)
+     *  fail independently — a shared counter would let one path's success reset the other's run and
+     *  report a persistent failure as a string of first-failures.
+     *
+     *  AtomicInteger, unlike the census fields above which are deliberately unsynchronized: those
+     *  tolerate a stale read (one duplicate line), but `+=` on a plain Int can LOSE an increment, and
+     *  the count here is the entire load-bearing distinction between a transient and a run. The two
+     *  flushes can run concurrently on the io scope, so that race is reachable. */
+    private val liveInsertFailuresStd = java.util.concurrent.atomic.AtomicInteger(0)
+    private val liveInsertFailuresRealtime = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var lastStdInsertFailureLogMs = 0L
+    @Volatile private var lastRealtimeInsertFailureLogMs = 0L
+
     /** #1635: ms since the CLIENT_HELLO write, or null when none is outstanding. Lets the bond-state
      *  observer time a pairing transition against the write that may have triggered it, and report no
      *  elapsed time at all for a transition belonging to some other pairing. */
@@ -2644,7 +2685,20 @@ class WhoopBleClient(
     @Suppress("UNUSED_PARAMETER")
     private fun onBackfillChunkCommitted(batch: StreamBatch) {
         decodedChunksThisSession += 1   // invoked once per non-empty decoded chunk (#77 family tally)
-        if (!analyzeAfterBackfillScheduled.compareAndSet(false, true)) return
+        schedulePostBackfillAnalysis()
+    }
+
+    private fun schedulePostBackfillAnalysis() {
+        if (!analyzeAfterBackfillScheduled.compareAndSet(false, true)) {
+            // A later chunk arrived while the debounce or scoring pass was already active. Remember it:
+            // sleep-critical gravity commonly trails HR, and dropping this signal is how a partial first
+            // pass could become the final answer until the 15-minute backstop.
+            analyzeAfterBackfillPending.set(true)
+            return
+        }
+        // The debounce is part of the calculation lifecycle. Publish this before waiting so Sleep never
+        // flashes a final "not detected" verdict between HISTORY_COMPLETE and the scoring pass starting.
+        _state.update { it.copy(analyzingHistory = true) }
         ioScope.launch {
             try {
                 delay(POST_BACKFILL_ANALYZE_DELAY_MS) // let trailing chunks of the same session land
@@ -2655,17 +2709,17 @@ class WhoopBleClient(
                 val profile = profileStore.toUserProfile()
                 // #836: the post-backfill pass is a real update path, so it ALWAYS re-scores (mirroring the
                 // Swift `analyzeRecent(force: true)` call `refreshAfterCompletedBackfill` makes) — but it must
-                // ADVANCE the shared HR-fingerprint watermark on success, which it previously did NOT. That
+                // ADVANCE the shared raw-analysis watermark on success, which it previously did NOT. That
                 // watermark logic lived only in AppViewModel's 15-min loop, so after this pass the very next
                 // idle tick saw `fp != watermark` and re-ran the IDENTICAL maxDays×~54h re-score — the
                 // double-charge that made every reconnect pay for the multi-day pass twice. Swift already
                 // advances the watermark at the end of EVERY successful analyzeRecent (IntelligenceEngine.swift);
                 // this brings Android into lockstep. Captured before the run, written only on success, so an
                 // interrupted/failed pass can never advance the watermark past unscored data.
-                val analyzeFp = repository.hrFingerprint()
+                val analyzeFp = repository.analysisFingerprint()
                 // Attribute this forced post-offload re-score. A completed offload ALWAYS re-scores (#836),
                 // so an EMPTY/duplicate offload (rows=0, common on a flapping link) still pays for a full
-                // ~18-day pass over the whole raw store (#1146). Compare the pre-run HR fingerprint
+                // ~18-day pass over the whole raw store (#1146). Compare the pre-run raw-input fingerprint
                 // (rowCount:maxTs) to the watermark the last successful run advanced: `newData=no` means
                 // nothing changed since the last run — a re-score driven purely by the reconnect+offload, not
                 // by data. These lines quantify the background battery cost (#1005). Log-only; behaviour is
@@ -2676,7 +2730,7 @@ class WhoopBleClient(
                 // flapping-link offload storm (~186 passes in 7.5h were measured) that churn made the
                 // reactive Trends/streak Flows flicker between full and empty — a scare that looked like
                 // data loss (#1196). Scoped to THIS post-offload trigger only: import/edit/settings/
-                // recalibrate re-scores force regardless of the HR fingerprint and are untouched. Twin of
+                // recalibrate re-scores force regardless of the raw-input fingerprint and are untouched. Twin of
                 // the Swift `analyzeRecent(skipIfUnchanged:)` gate at the refreshAfterCompletedBackfill site.
                 val newData = analyzeFp != NoopPrefs.analyzeWatermark(context)
                 log("re-score: trigger=post-offload newData=" +
@@ -2771,6 +2825,13 @@ class WhoopBleClient(
                 }.onSuccess {
                     // Advance the shared watermark so the next 15-min tick sees no change and skips (#836).
                     NoopPrefs.setAnalyzeWatermark(context, analyzeFp)
+                    // #1735: stamp the post-sync pass too, not just the idle one in AppViewModel. This is
+                    // the pass that runs right after an offload, so it is the one a "synced but nothing
+                    // appeared" report is actually asking about.
+                    runCatching {
+                        NoopPrefs.of(context).edit()
+                            .putLong("score.lastPassAt", System.currentTimeMillis() / 1000).apply()
+                    }
                     log("Backfill: post-sync scoring pass done")
                     // #277 diagnostic: surface the day-key the dashboard treats as "today" against the
                     // newest banked row, so a UTC-bucket vs local-day split (rows persist but Today
@@ -2797,7 +2858,17 @@ class WhoopBleClient(
                         .onSuccess { r -> log("HC writeback: ${r.written} record(s)" + if (r.ok) "" else " (failed: ${r.failures.joinToString()})") }
                 }
             } finally {
+                val retryAlreadyQueued = analyzeAfterBackfillPending.getAndSet(false)
+                if (!retryAlreadyQueued) _state.update { it.copy(analyzingHistory = false) }
                 analyzeAfterBackfillScheduled.set(false)
+                // If anything landed after this pass was scheduled, run once more after the same quiet
+                // grace. The complete analysis fingerprint makes a duplicate retry cheap, while a trailing
+                // gravity/RR/sleep-state chunk now gets the decisive sleep-detection pass immediately.
+                // Check pending again after releasing the scheduled latch so a chunk racing this finally
+                // block cannot strand its retry signal.
+                if (retryAlreadyQueued || analyzeAfterBackfillPending.getAndSet(false)) {
+                    schedulePostBackfillAnalysis()
+                }
             }
         }
     }
@@ -2916,6 +2987,7 @@ class WhoopBleClient(
     private var whoop5HistoryAttempts = 0
     /** One-shot debounce: a post-backfill scoring pass is already scheduled/running. */
     private val analyzeAfterBackfillScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val analyzeAfterBackfillPending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Guards the once-per-connect initial offload kick (Swift `backfillStarted`). */
     private var backfillStarted = false
@@ -5914,6 +5986,8 @@ class WhoopBleClient(
                     // these as REALTIME_DATA — the strap rejected them on the unauthenticated link), then arm
                     // realtime HR with puffin framing. Mirrors the macOS post-bond flow.
                     didBond = true
+                    helloDeferredConsecutive = 0  // the handshake works on this strap; the run is over
+                    helloDeferredGuidanceLogged = false
                     helloOverrideAttempts = 0     // #1635: the strap answered — the override's budget resets
                     helloOverrideExhaustedLogged = false
                     cancelBondWatchdog()          // genuine bond reached — the handshake watchdog stands down (#50)
@@ -7748,7 +7822,14 @@ class WhoopBleClient(
         val ok = safeGatt("writeClientHello") {
             ops.writeCharacteristicCompat(ch, hello, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         }
-        if (!ok) {
+        if (ok) {
+            // Claimed only once the stack ACCEPTED the write. Setting these before the call left a window
+            // where a concurrent reader saw a hello that had not gone out, and cleared the deferral run
+            // on an attempt that failed — under-reporting the very run the count exists to measure.
+            helloWrittenThisLink = true
+            helloDeferredConsecutive = 0
+            helloDeferredGuidanceLogged = false
+        } else {
             writeInFlight = false
             log("CLIENT_HELLO write rejected by stack")
             clientHelloWriteAtMs = 0L   // never went out; no callback is owed
@@ -7858,6 +7939,18 @@ class WhoopBleClient(
                     log(helloOverrideExhaustedLine(helloOverrideAttempts))
                 }
                 if (explicitBondDefersHello(explicitBondRequestedThisLink, helloOverride = helloOverride)) {
+                    // This branch used to return without a word, so the hello's absence was visible only
+                    // as a line that never appeared — and the deferral reads identically on the first
+                    // connect and the fiftieth. The count is what separates them.
+                    helloDeferredConsecutive += 1
+                    val fullGuidance = !helloDeferredGuidanceLogged
+                    if (helloDeferredConsecutive >= 2) helloDeferredGuidanceLogged = true
+                    log(helloDeferredByExplicitBondLine(
+                        consecutive = helloDeferredConsecutive,
+                        overrideOptedIn = overrideOptedIn,
+                        overrideAttempts = helloOverrideAttempts,
+                        full = fullGuidance,
+                    ))
                     // Same trap as the suppression path below, and worse here. The watchdog was armed at
                     // discovery and bounces the link whenever didBond is false — which deferring the hello
                     // guarantees. Tearing the link down while an OS pairing is in flight is the single
@@ -8068,9 +8161,26 @@ class WhoopBleClient(
         if (!batch.isEmpty) {
             try {
                 repository.insert(batch, deviceId)
+                liveInsertFailuresRealtime.set(0)
             } catch (t: Throwable) {
                 // Re-buffer at the front so these frames retry on the next cadence (port of Collector).
                 synchronized(collectorLock) { liveBuffer.addAll(0, frames) }
+                // The #1118 SECOND transport, silent for the same reason the standard path was: the
+                // census above reports what was OFFERED, so a store rejecting everything still reads
+                // like a healthy stream.
+                val runLength = liveInsertFailuresRealtime.incrementAndGet()
+                val nowMs = System.currentTimeMillis()
+                if (shouldEmitLiveInsertFailure(lastRealtimeInsertFailureLogMs, nowMs)) {
+                    lastRealtimeInsertFailureLogMs = nowMs
+                    log(liveInsertFailedLine(
+                        transport = "live-realtime",
+                        throwableName = t.javaClass.simpleName,
+                        message = t.message,
+                        hrFrames = batch.hr.size,
+                        rrFrames = batch.rr.size,
+                        consecutiveFailures = runLength,
+                    ))
+                }
             }
         }
     }
@@ -8132,8 +8242,24 @@ class WhoopBleClient(
         }
         try {
             repository.insert(StreamBatch(hr = hr, rr = rr), deviceId)
+            liveInsertFailuresStd.set(0)
         } catch (t: Throwable) {
             synchronized(collectorLock) { stdHr.addAll(0, hr); stdRr.addAll(0, rr) }
+            // Swallowing this made the instrumentation above read like success: a store failing every
+            // insert produced a log full of `rr emit ... offered=N` and no sign that none of it landed.
+            val runLength = liveInsertFailuresStd.incrementAndGet()
+            val nowMs = System.currentTimeMillis()
+            if (shouldEmitLiveInsertFailure(lastStdInsertFailureLogMs, nowMs)) {
+                lastStdInsertFailureLogMs = nowMs
+                log(liveInsertFailedLine(
+                    transport = "live-standard",
+                    throwableName = t.javaClass.simpleName,
+                    message = t.message,
+                    hrFrames = hr.size,
+                    rrFrames = rr.size,
+                    consecutiveFailures = runLength,
+                ))
+            }
         }
     }
 
@@ -8151,7 +8277,19 @@ class WhoopBleClient(
      */
     private fun beginBackfill() {
         if (!connectHandshakeDone) {
-            log("Backfill: deferred — connect handshake not done yet")
+            backfillDeferralsThisLink += 1
+            // familyEstablished is read BEFORE connectedFamily on purpose: the happens-before it carries
+            // is what makes the family read safe, and connectedFamily otherwise holds a default or the
+            // previous link's value. Same ordering rule as batterySource(familyEstablished, family).
+            val established = familyEstablished
+            log(backfillDeferredLine(
+                family = if (established) connectedFamily.name else null,
+                didBond = didBond,
+                helloEverWrittenThisLink = helloWrittenThisLink,
+                explicitBondRequestedThisLink = explicitBondRequestedThisLink,
+                deferralsThisLink = backfillDeferralsThisLink,
+                msSinceConnect = if (connectedAtMs > 0L) System.currentTimeMillis() - connectedAtMs else -1L,
+            ))
             return
         }
         if (backfilling) return
@@ -9219,6 +9357,10 @@ class WhoopBleClient(
         // exactly the gap this stopwatch was added to close. It is overwritten by the next request, and a
         // stale value can only ever produce a large elapsed against a label that names what it measures.
         connectHandshakeDone = false
+        helloWrittenThisLink = false
+        backfillDeferralsThisLink = 0
+        // helloDeferredConsecutive is deliberately NOT cleared: it counts ACROSS connections, which is
+        // the only way a permanent deferral is distinguishable from a pending one.
         familyEstablished = false   // the next link re-establishes it at service discovery
         loggedFirmwareGate = null
         clientHelloWriteAtMs = 0L

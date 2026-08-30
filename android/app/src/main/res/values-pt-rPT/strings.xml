@@ -13,6 +13,14 @@
     <string name="nav_live">Em direto</string>
     <string name="nav_intervals">Intervalos</string>
     <string name="nav_sleep">Sono</string>
+    <string name="sleep_status_calculating_title">A calcular o sono da noite passada…</string>
+    <string name="sleep_status_calculating_body">O histórico da bracelete chegou. A NOOP está agora a detetar e analisar a noite.</string>
+    <string name="sleep_status_sync_failed_title">O sono da noite passada não foi sincronizado</string>
+    <string name="sleep_status_sync_failed_body">A sincronização do histórico parou antes de terminar. Mantém a bracelete por perto e tenta novamente.</string>
+    <string name="sleep_status_waiting_title">À espera do sono da noite passada</string>
+    <string name="sleep_status_waiting_body">Liga a bracelete e sincroniza o histórico. A NOOP calculará a noite quando os dados noturnos chegarem.</string>
+    <string name="sleep_status_not_detected_title">O sono da noite passada não foi detetado</string>
+    <string name="sleep_status_not_detected_body">A sincronização terminou, mas a NOOP não conseguiu identificar com confiança um período de sono. Mantém a bracelete ligada e sincroniza novamente; a noite anterior abaixo continua a ser o teu último sono detetado.</string>
     <string name="nav_breathe">Respirar</string>
     <string name="nav_stress">Stress</string>
     <string name="nav_workouts">Treinos</string>
@@ -2625,4 +2633,5 @@
     <string name="l10n_body_clock_dial_card_body_clock_dial_03cdbc31">Mostrador do relógio biológico</string>
     <string name="l10n_body_clock_dial_card_last_night_6eaba4dd">A noite passada</string>
     <string name="l10n_body_clock_dial_card_your_clock_1b91f5ee">O seu relógio</string>
+    <string name="vo2max_method_change_caption">A linha é interrompida onde o método de estimativa mudou ou não foi registado.</string>
 </resources>
