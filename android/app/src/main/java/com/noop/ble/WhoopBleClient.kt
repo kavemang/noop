@@ -201,6 +201,14 @@ data class LiveState(
     /** Set when an offload ended abnormally (strap went quiet mid-sync / idle-watchdog fired), so a
      *  stalled history download isn't silent. Cleared on the next successful HISTORY_COMPLETE. (PR #85) */
     val lastSyncError: String? = null,
+    /** True once this strap can actually hand over history — the UI mirror of the client's
+     *  `connectHandshakeDone`, which [beginBackfill] already requires before it will request an offload.
+     *
+     *  Exposed because [bonded] is NOT that condition and reads true too early: the live-HR path sets it
+     *  for a 5/MG that has never completed a handshake, so Today offered a pull-to-sync that was accepted
+     *  by the gesture and then refused deeper down, silently. Gating on this makes the control unavailable
+     *  exactly when the sync would have been declined anyway — never when it would have run. */
+    val historyReady: Boolean = false,
     /** Set when a connect attempt fails because the strap wiped its Bluetooth bond — a firmware reset,
      *  or the official WHOOP app re-bonding it. The OS still holds a now-stale bond, so retrying the
      *  direct connect just re-fails. Carries an actionable forget+re-pair guide; cleared on the next
@@ -1791,9 +1799,17 @@ class WhoopBleClient(
     // MARK: Published state — the single source of truth the UI observes. Seeded with the PERSISTED
     // last-sync time (PR #556 reimpl) so a freshly-recreated client doesn't show "Never" when this
     // install has actually synced before; a 0 (never) leaves it null, unchanged.
-    private val _state = MutableStateFlow(
-        LiveState(lastSyncAt = NoopPrefs.lastSyncAt(context).takeIf { it > 0L }),
-    )
+    //
+    // Deliberately seeded with NOTHING. The value belongs to the ACTIVE strap, and resolving which strap
+    // that is needs the registry, which is suspend — so [seedLastSyncFromActiveStrap] fills it in a moment
+    // later and the screens show no last-sync until it does.
+    //
+    // The obvious cheap seed, NoopPrefs.lastDevice, is the trap: it records the last strap to BOND, which
+    // on a two-strap install is whichever one was worn most recently, not the one the screens are scoped
+    // to. Seeding from it would put the 4.0's sync time on a 5/MG's Today screen — the exact bug this
+    // change exists to remove, surviving inside the fix for it. A blank moment is honest; another strap's
+    // timestamp is not.
+    private val _state = MutableStateFlow(LiveState())
     val state: StateFlow<LiveState> = _state.asStateFlow()
 
     private val _groundTruthImuStatus = MutableStateFlow(GroundTruthImuStatus())
@@ -2690,6 +2706,35 @@ class WhoopBleClient(
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
+     * Seed the last-sync display from the ACTIVE strap's own stamp — PR #556's intent, correctly attributed.
+     *
+     * Resolved against the registry's active row, exactly as the strap-log header resolves firmware and
+     * last-sync. NOT against `NoopPrefs.lastDevice`, which records the last strap to BOND: on a two-strap
+     * install that is whichever was worn most recently, not the one the screens are scoped to, so seeding
+     * from it would put one strap's sync time on the other's Today screen.
+     *
+     * The legacy global still applies when exactly one strap is paired, because only then can it not be
+     * ambiguous (see [resolveLastSync]). On the install that produced the capture — two straps, the active
+     * one having never synced — this correctly leaves the display empty and the 5/MG reads "never".
+     */
+    private fun seedLastSyncFromActiveStrap() {
+        val registry = (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry ?: return
+        ioScope.launch {
+            val rows = runCatching { registry.all() }.getOrDefault(emptyList())
+            val activeId = runCatching { registry.activeDeviceId() }.getOrNull()
+            val activeAddr = rows.firstOrNull { it.id == activeId }?.peripheralId
+            val seed = resolveLastSync(
+                perDevice = runCatching { NoopPrefs.lastSyncAtFor(context, activeAddr) }.getOrDefault(0L),
+                legacyGlobal = runCatching { NoopPrefs.lastSyncAt(context) }.getOrDefault(0L),
+                pairedCount = rows.size,
+            ) ?: return@launch
+            // Never overwrite a value this session earned: a HISTORY_COMPLETE landing while the registry
+            // read is in flight is newer than anything persisted, and must win.
+            _state.update { st -> if (st.lastSyncAt == null) st.copy(lastSyncAt = seed) else st }
+        }
+    }
+
+    /**
      * Durable archive for undecodable history record frames (#77/#91). Written BEFORE the strap is
      * acked, so an unrecognised firmware layout can't cost the user their only copy: the ack frees
      * the strap's records, and this archive is the only remaining copy until the layout is mapped.
@@ -2697,6 +2742,7 @@ class WhoopBleClient(
     private val rawHistoryArchive = RawHistoryArchive(context)
 
     init {
+        seedLastSyncFromActiveStrap()
         // Retro-decode (#151): when the decoder gains a historical layout (WHOOP 4.0 v25), re-run every
         // archived undecodable frame through it and insert whatever now decodes — the only path by
         // which already-acked, strap-freed history backfills after an update. Runs once per APP version
@@ -4831,6 +4877,7 @@ class WhoopBleClient(
         // Clock-before-history is mandatory — an un-clocked 5/MG discards sensor data rather than banking it
         // — and it is only reached here because the strap has just demonstrated it answers commands.
         connectHandshakeDone = true
+        _state.update { it.copy(historyReady = true) }
         // requestSync ALSO gates on state.bonded, and for a 5/MG that flag is set by the live-HR path -
         // the first plausible reading over the standard profile. A strap sitting on a charger streams no
         // HR, so without this the probe would succeed, announce it, and then be refused by a second gate
@@ -6342,6 +6389,7 @@ class WhoopBleClient(
             // WHOOP 5.0/MG uses CLIENT_HELLO, not this WHOOP4 command sequence, so it is skipped for it.
             if (!connectHandshakeDone && connectedFamily == DeviceFamily.WHOOP4) {
                 connectHandshakeDone = true
+                _state.update { it.copy(historyReady = true) }
                 noteRebootReconnectIfNeeded()
                 runConnectHandshake()
             }
@@ -8399,6 +8447,7 @@ class WhoopBleClient(
             // once-per-connection (keep-alive resubscribes also land here). (#78 fork, hardware-proven)
             if (connectedFamily == DeviceFamily.WHOOP5 && didBond && !connectHandshakeDone) {
                 connectHandshakeDone = true
+                _state.update { it.copy(historyReady = true) }
                 noteRebootReconnectIfNeeded()
                 send(CommandNumber.SET_CLOCK, setClockPayload(), withResponse = true)
                 send(CommandNumber.GET_CLOCK, byteArrayOf(), withResponse = true)
@@ -9040,15 +9089,23 @@ class WhoopBleClient(
         }
         // PR #556 reimpl: persist the HISTORY_COMPLETE instant so "Last synced N ago" survives a BLE-client
         // recreation / process restart and stops reverting to "Never".
-        if (reason == "HISTORY_COMPLETE") NoopPrefs.setLastSyncAt(context, nowSec)
+        // Stamped against the strap that actually completed this offload, never globally. The old single
+        // key reported one strap's sync on another's screen — a 5/MG with zero banked rows reading
+        // "Last sync: 4d ago" from its paired 4.0, which is what sent this whole investigation after a
+        // regression that never existed.
+        if (reason == "HISTORY_COMPLETE") NoopPrefs.setLastSyncAtFor(context, lastDeviceAddress, nowSec)
         // #57 debug: write-health signal for the export. "Last sync" fires even on an empty/failed offload,
         // so it can't distinguish "0 rows because the strap was empty" from "0 rows because writes FAILED".
         // Record the last time rows actually landed, and the last time an offload STALLED on a persist
         // failure (the closed-DB-after-restore class) — so a future "sync stuck at 0" report is decidable.
         runCatching {
+            // Per strap, for the same reason the last-sync stamp above is: these two lines sat together
+            // in the capture, both global, both reporting the 4.0's activity on the 5/MG's screen.
             val p = NoopPrefs.of(context).edit()
-            if (backfiller.sessionRowsPersisted > 0) p.putLong("sync.lastWriteOkAt", nowSec)
-            if (backfiller.persistStalled) p.putLong("sync.lastWriteStalledAt", nowSec)
+            val okKey = writeHealthPrefKey(lastDeviceAddress, "lastWriteOkAt")
+            val stalledKey = writeHealthPrefKey(lastDeviceAddress, "lastWriteStalledAt")
+            if (backfiller.sessionRowsPersisted > 0 && okKey != null) p.putLong(okKey, nowSec)
+            if (backfiller.persistStalled && stalledKey != null) p.putLong(stalledKey, nowSec)
             p.apply()
         }
         // #580: a WHOOP 5/MG whose firmware serves no history offload (acks SEND_HISTORICAL_DATA but emits
@@ -9725,6 +9782,9 @@ class WhoopBleClient(
         // exactly the gap this stopwatch was added to close. It is overwritten by the next request, and a
         // stale value can only ever produce a large elapsed against a label that names what it measures.
         connectHandshakeDone = false
+        // Mirrors the flag above: a new link has not done the handshake, so it cannot hand over history
+        // until it does. Cleared HERE and nowhere else, so the two can never disagree.
+        _state.update { it.copy(historyReady = false) }
         // #1635: the probe is per LINK — its whole basis is one stable link's behaviour, and carrying the
         // "already asked" flag across a reconnect would let one silent link retire the experiment. The
         // REFUSAL, by contrast, is persisted per device: that one is the strap's answer, not the link's.
