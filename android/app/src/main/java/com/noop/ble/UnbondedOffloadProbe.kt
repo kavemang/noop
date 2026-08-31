@@ -139,8 +139,9 @@ internal fun unbondedProbeSupersedesLine(explicitBondOptedIn: Boolean): String =
         " asks whether the offload needs a bond at all. That question needs a link with no CLIENT_HELLO on" +
         " it, so the hello is not written here (press Connect to try the handshake instead)." +
         (if (explicitBondOptedIn)
-            " NOTE: \"Ask Android to pair\" is also on. A pairing in flight makes a refusal unattributable" +
-                " to the strap, so turn it off for a clean answer."
+            " \"Ask Android to pair\" is on but is ALSO skipped on this connect — this branch returns" +
+                " before the pairing request, so no SMP is in flight and a refusal here is attributable" +
+                " to the strap."
         else "") +
         " (#1635, experimental)"
 
@@ -221,6 +222,98 @@ internal fun puffinSubscribeRefusedLine(uuid: String, status: String): String =
     "Unbonded offload probe: subscribe of $uuid failed $status. If this is an insufficient-authentication" +
         " or -encryption status, the puffin notify chars need an encrypted link, the historical offload" +
         " cannot be reached without a bond, and a 5/MG that refuses SMP can never sync history (#1635)."
+
+/**
+ * Stage 1 ended because the LINK did, before any subscribe was confirmed or refused.
+ *
+ * The outcome the probe had no verdict for, and the field capture is unambiguous about how much that
+ * matters: 16 probe starts, 0 verdicts of any kind, 0 confirmed subscribes, 0 refusals, and the link
+ * dying 10.8s into every connect — roughly three seconds after the CCCD writes went out. With no verdict
+ * the silence budget never advanced, so the probe re-ran on every reconnect indefinitely. That is exactly
+ * the unbounded retry [shouldProbeUnbondedOffload]'s own doc claims this design prevents, reintroduced by
+ * an unhandled exit.
+ *
+ * It is also a FINDING, not just a gap. No callback and no ATT error, then a teardown about three seconds
+ * later, is the CLIENT_HELLO's signature — the same silent elevate-and-drop, on the same service. It does
+ * not prove the puffin characteristics require encryption, but it is what that would look like from here,
+ * and it says plainly that the offload is not reachable on this strap without a bond.
+ *
+ * Charged to the silence budget, because "the link will not survive being asked" is a stronger reason to
+ * stop asking than a strap that merely stayed quiet.
+ */
+internal fun unbondedProbeLinkLostLine(
+    uptimeMs: Long,
+    confirmedSubscribes: Int,
+    total: Int,
+): String =
+    "Unbonded offload probe: the link dropped ${uptimeMs}ms into this connect with $confirmedSubscribes" +
+        " of $total puffin subscribes confirmed and no refusal — no callback and no ATT error, then a" +
+        " teardown. That is the CLIENT_HELLO's own signature on the same service, so the offload is not" +
+        " reachable on this strap without a bond (#1635)."
+
+/**
+ * Stage 2 ended because the link did, with GET_CLOCK already on the wire.
+ *
+ * Deliberately NOT the same line as [unbondedProbeLinkLostLine], and that distinction is the whole point.
+ * A stage-1 link loss carries a finding — the subscribes drew no callback and no ATT error before the drop,
+ * which is the CLIENT_HELLO's signature. A stage-2 link loss carries none: the subscribes LANDED, the
+ * transport was open, and the strap was still within its window to answer when the link went. Reporting
+ * that as evidence the strap will not answer would be the same conflation this probe keeps having to
+ * unpick.
+ *
+ * It still spends a budget attempt, because an inconclusive link is not a reason to retry forever — that
+ * is the hole this exists to close, and leaving stage 2 uncounted would reopen it one stage later.
+ */
+internal fun unbondedProbeLinkLostAskingLine(uptimeMs: Long, waitedMs: Long): String =
+    "Unbonded offload probe: the link dropped ${uptimeMs}ms into this connect, ${waitedMs}ms after" +
+        " GET_CLOCK went out. The subscribes had landed, so the transport was open and the strap was still" +
+        " inside its window to answer — this link settles nothing either way (#1635)."
+
+/**
+ * How many times the probe may stand aside for the DIS chain before going anyway.
+ *
+ * A cap rather than an open wait, because the chain has exits that never reach its terminal — a refused
+ * read, or a strap that stops answering part-way — and a probe waiting on a flag nobody will clear would
+ * simply never run. Eight checks at a second each, then it takes its chances and the trace says which
+ * happened.
+ */
+internal const val UNBONDED_PROBE_MAX_DEFERRALS = 8
+
+/**
+ * Should the probe wait rather than start?
+ *
+ * Pure so the decision is testable without a GATT stack, like every other judgement in this file. It was
+ * briefly inline in the client, which is how the same class of gap reached #1755: the behaviour was
+ * argued for in a comment and asserted nowhere.
+ */
+internal fun unbondedProbeShouldWaitForDis(
+    disChainInFlight: Boolean,
+    deferralsSoFar: Int,
+    cap: Int = UNBONDED_PROBE_MAX_DEFERRALS,
+): Boolean = disChainInFlight && deferralsSoFar < cap
+
+/**
+ * The probe is holding off because the unbonded DIS chain still has the GATT queue.
+ *
+ * Logged once per link rather than per deferral: the useful fact is that it waited at all, and a line a
+ * second for eight seconds would bury it. Without this the probe simply appears late in a capture with
+ * no reason given, which is the shape of problem this whole area keeps producing.
+ */
+internal fun unbondedProbeWaitingForDisLine(): String =
+    "Unbonded offload probe: waiting for the DIS read chain to finish — they share one GATT queue, and" +
+        " starting on top of it makes every CCCD write come back busy (#1635)."
+
+/**
+ * The wait ran out and the probe went anyway.
+ *
+ * Not a failure. The DIS chain has exits that never reach its terminal — a refused read, or a strap that
+ * stops answering part-way — so a probe that waited on the flag forever would never run at all. Saying
+ * which of the two happened is the point: a probe that waited the full budget and then found a busy queue
+ * is a different capture from one that started cleanly.
+ */
+internal fun unbondedProbeStoppedWaitingLine(deferrals: Int): String =
+    "Unbonded offload probe: the DIS chain has not finished after $deferrals checks — starting anyway." +
+        " If the subscribes come back busy, that queue is why, not the strap (#1635)."
 
 /**
  * Stage 2's question, logged so the wait that follows is attributable to it.

@@ -883,6 +883,10 @@ class WhoopBleClient(
          *  stable, while the cost of asking too early is a false "does not answer" that closes #1635 the
          *  wrong way. */
         private const val UNBONDED_PROBE_REPLY_WAIT_MS = 8_000L
+
+        /** #1635: how long the probe waits between checks while the unbonded DIS chain is still running. */
+        private const val UNBONDED_PROBE_DEFER_MS = 1_000L
+
         /** 5/MG zero-frame retry: pause before re-requesting history when a session timed out having
          *  produced nothing (the first request after connect can go entirely unanswered). */
         private const val WHOOP5_HISTORY_RETRY_DELAY_MS = 700L
@@ -2406,6 +2410,20 @@ class WhoopBleClient(
      *  link that never scheduled it. Its own gates would still hold, but a timer that outlives its link is
      *  how surprises get in. */
     private val unbondedProbeStartRunnable = Runnable { gatt?.let { beginUnbondedOffloadProbe(it) } }
+
+    /**
+     * #1635: the unbonded DIS read chain is mid-flight.
+     *
+     * DIS reads and CCCD writes share ONE serialized GATT queue, and a field capture showed why that
+     * matters: the probe fired while the chain was still running, every descriptor write came back
+     * `writeDescriptor busy`, all four gave up after the shared 8-retry budget, and the link produced no
+     * answer at all. The probe had been scheduled on a fixed delay chosen on the reasoning that three
+     * seconds was enough separation — on that link the chain was still going at seven.
+     */
+    private var disChainInFlight = false
+
+    /** #1635: how many times the probe has stood aside for the DIS chain on this link. */
+    private var unbondedProbeDeferrals = 0
 
     /** #1635: links that subscribed the puffin chars and drew no reply. Per PROCESS, deliberately NOT
      *  cleared by [reset] — its whole job is to bound a retry that spans reconnects. A refusal latches per
@@ -4637,18 +4655,23 @@ class WhoopBleClient(
      * hardware-revision read is issued from [onInbound] once the serial lands. Firing both here would
      * silently drop the second. Read-only and non-fatal: any failure just leaves the variant UNKNOWN.
      */
-    fun readDisIdentity() {
-        if (disRead) return
-        val g = gatt ?: return
-        if (connectedFamily == DeviceFamily.WHOOP4) return
-        val ops = gattOps ?: return
+    fun readDisIdentity(): Boolean {
+        // Returns whether a read was actually ISSUED, so a caller can tell "the chain is running" from
+        // "the chain never started". Every branch above the read is an exit that leaves nothing in
+        // flight, and the unbonded offload probe waits on this answer — told `true` unconditionally it
+        // would stand aside for a chain that does not exist and burn its whole budget for nothing.
+        if (disRead) return false
+        val g = gatt ?: return false
+        if (connectedFamily == DeviceFamily.WHOOP4) return false
+        val ops = gattOps ?: return false
         val ch = g.getService(DIS_SERVICE)?.getCharacteristic(DIS_SERIAL_CHAR)
         if (ch != null && (ch.properties and BluetoothGattCharacteristic.PROPERTY_READ) != 0) {
             disRead = true
             safeGatt("readCharacteristic(dis-serial)") { ops.readCharacteristicCompat(ch) }
-        } else {
-            log("DIS: serial characteristic unavailable — hardware variant stays unknown")
+            return true
         }
+        log("DIS: serial characteristic unavailable — hardware variant stays unknown")
+        return false
     }
 
     /**
@@ -4664,6 +4687,11 @@ class WhoopBleClient(
      */
     private fun noteReadFailure(uuid: java.util.UUID, status: Int) {
         if (uuid !in DIS_CHARS) return
+        // The chain is over. readNextDisExtra is only reached from the SUCCESS path, so a refused read
+        // ends it with nothing further in flight — and #490's whole subject is a strap that refuses. Left
+        // set, the unbonded offload probe would stand aside for its full budget waiting on a chain that
+        // had already died, in exactly the case the probe most wants a clear queue for.
+        disChainInFlight = false
         log(disReadFailureLine(uuid.toString(), gattWriteStatusLabel(status)))
         // Report it, but do NOT latch it when WE put a pairing in flight on this link. The latch is
         // persisted per device and permanent, and a read issued into a link that is mid-encryption
@@ -4718,7 +4746,7 @@ class WhoopBleClient(
         ) return
         log("DIS: trying the identity read on an UNbonded link — unproven, and a refusal is itself the" +
             " answer to whether DIS needs an encrypted bond (#490)")
-        readDisIdentity()
+        disChainInFlight = readDisIdentity()
     }
 
     /**
@@ -4763,6 +4791,19 @@ class WhoopBleClient(
                 silentLinksSoFar = unbondedProbeSilentLinks,
             )
         ) return
+        // Stand aside while the DIS chain still holds the one serialized GATT queue. The fixed 6s delay
+        // this used to rely on was chosen by reasoning and was wrong: a capture caught the chain still
+        // running at 7s, every CCCD write returning busy, all four abandoned after the shared retry
+        // budget, and the link yielding no answer. Waiting on the actual signal costs a second and
+        // removes the guess.
+        if (unbondedProbeShouldWaitForDis(disChainInFlight, unbondedProbeDeferrals)) {
+            unbondedProbeDeferrals++
+            if (unbondedProbeDeferrals == 1) log(unbondedProbeWaitingForDisLine())
+            handler.removeCallbacks(unbondedProbeStartRunnable)
+            handler.postDelayed(unbondedProbeStartRunnable, UNBONDED_PROBE_DEFER_MS)
+            return
+        }
+        if (disChainInFlight) log(unbondedProbeStoppedWaitingLine(unbondedProbeDeferrals))
         val svc = g.getService(WHOOP5_SERVICE) ?: return
         // Claim the link BEFORE queueing, so a keep-alive drain landing between the two cannot start a
         // second probe against the same four characteristics.
@@ -4967,10 +5008,12 @@ class WhoopBleClient(
             DIS_FW_REV_CHAR -> DIS_MANUFACTURER_CHAR
             DIS_MANUFACTURER_CHAR -> DIS_MODEL_NUMBER_CHAR
             DIS_MODEL_NUMBER_CHAR -> DIS_SW_REV_CHAR
-            else -> return
+            // Chain complete. Releasing the queue here is what lets the unbonded offload probe start
+            // without contending with it (#1635).
+            else -> { disChainInFlight = false; return }
         }
-        val g = gatt ?: return
-        val ops = gattOps ?: return
+        val g = gatt ?: run { disChainInFlight = false; return }
+        val ops = gattOps ?: run { disChainInFlight = false; return }
         val ch = g.getService(DIS_SERVICE)?.getCharacteristic(next)
         if (ch == null || (ch.properties and BluetoothGattCharacteristic.PROPERTY_READ) == 0) {
             // Not present on this strap: skip it and carry on down the chain rather than stopping.
@@ -6688,14 +6731,23 @@ class WhoopBleClient(
                         // logged NOTHING — a strap log was indistinguishable from one where the strap never
                         // answered, which is why a broken decode survived unnoticed. The raw-frame dump above
                         // is unconditional for the same reason. Twin of the Swift branch.
-                        val pagesBehind = com.noop.protocol.DataRange.pagesBehind(frame, cmdOff)
-                        if (pagesBehind != null) {
-                            log("Strap backlog pages behind: $pagesBehind (#689 — GET_DATA_RANGE ring backlog, diagnostic only)")
-                        } else {
-                            log(
-                                "Strap backlog pages behind: not decodable from this frame (#689 — offsets may " +
-                                    "have moved; the raw frame above is the input). Diagnostic only, sync is unaffected.",
-                            )
+                        // ...but NOT on the PENDING(2) ack. GET_DATA_RANGE answers twice — a short ack, then
+                        // the payload — which Framing's result-code table already records ("2=PENDING
+                        // precedes SUCCESS on GET_DATA_RANGE"). The ack carries no ring pointers at all, so
+                        // decoding it failed every time and reported a decode problem that did not exist:
+                        // one "offsets may have moved" per sync on healthy hardware, pointing the reader at
+                        // an alignment bug rather than at the ack. Skip it here; a SUCCESS frame that will
+                        // not decode still logs loudly, which is the case the paragraph above protects.
+                        if (!com.noop.protocol.DataRange.isPendingResponse(frame, cmdOff)) {
+                            val pagesBehind = com.noop.protocol.DataRange.pagesBehind(frame, cmdOff)
+                            if (pagesBehind != null) {
+                                log("Strap backlog pages behind: $pagesBehind (#689 — GET_DATA_RANGE ring backlog, diagnostic only)")
+                            } else {
+                                log(
+                                    "Strap backlog pages behind: not decodable from this frame (#689 — offsets may " +
+                                        "have moved; the raw frame above is the input). Diagnostic only, sync is unaffected.",
+                                )
+                            }
                         }
                         dataRangeNewestUnix(frame)?.let {
                             strapNewestTs = it
@@ -9792,7 +9844,38 @@ class WhoopBleClient(
         // see the cleared state, which is harmless, but one still queued must not reach the next link.
         handler.removeCallbacks(unbondedProbeStartRunnable)
         handler.removeCallbacks(unbondedProbeVerdictRunnable)
+        // A probe still mid-subscribe when the link goes is stage 1 ending with the LINK, and it is a
+        // verdict rather than an absence — see [unbondedProbeLinkLostLine]. Without this the probe
+        // reported nothing at all and its silence budget never advanced, so it re-ran on every reconnect:
+        // 16 starts and 0 verdicts in one capture. Charged to the budget, because "the link will not
+        // survive being asked" is a stronger reason to stop asking than a strap that merely stayed quiet.
+        //
+        // BOTH stages, because stage 2 has the identical hole: the verdict timer is cancelled just above,
+        // so a link lost during the GET_CLOCK wait would also report nothing and also fail to spend a
+        // budget attempt. The two get DIFFERENT lines — stage 1's loss carries the CLIENT_HELLO signature,
+        // stage 2's carries no finding at all — because conflating them is the mistake this probe keeps
+        // having to unpick.
+        if (unbondedProbeSubscribing || unbondedProbeAwaitingReply) {
+            val uptime = if (connectedAtMs > 0L) System.currentTimeMillis() - connectedAtMs else -1L
+            log(
+                if (unbondedProbeSubscribing) unbondedProbeLinkLostLine(
+                    uptimeMs = uptime,
+                    confirmedSubscribes = unbondedProbeSubscribed,
+                    total = WHOOP5_NOTIFY_CHARS.size,
+                ) else unbondedProbeLinkLostAskingLine(
+                    uptimeMs = uptime,
+                    waitedMs = if (unbondedProbeAskedAtMs > 0L)
+                        System.currentTimeMillis() - unbondedProbeAskedAtMs else -1L,
+                ),
+            )
+            unbondedProbeSilentLinks++
+            if (!unbondedProbeStillWorthAsking(unbondedProbeSilentLinks)) {
+                log(unbondedProbeGaveUpLine(unbondedProbeSilentLinks))
+            }
+        }
         unbondedProbeStartedThisLink = false
+        unbondedProbeDeferrals = 0
+        disChainInFlight = false
         unbondedProbeSubscribed = 0
         unbondedProbeSubscribing = false
         unbondedProbeAwaitingReply = false
