@@ -2422,13 +2422,32 @@ class WhoopBleClient(
      */
     private var disChainInFlight = false
 
+    /** #1635: has the "stopped asking Android to pair" line been printed this process? Same one-shot
+     *  latch idiom as [helloOverrideExhaustedLogged] — the reason does not change between links, and the
+     *  give-up it reports is persisted, so repeating it every connect would be noise. */
+    private var explicitBondGiveUpLogged = false
+
     /** #1635: how many times the probe has stood aside for the DIS chain on this link. */
     private var unbondedProbeDeferrals = 0
 
-    /** #1635: links that subscribed the puffin chars and drew no reply. Per PROCESS, deliberately NOT
-     *  cleared by [reset] — its whole job is to bound a retry that spans reconnects. A refusal latches per
-     *  device instead; silence is weaker evidence and gets a budget rather than a verdict. */
-    private var unbondedProbeSilentLinks = 0
+    /** #1635: links that subscribed the puffin chars and drew no reply — the silence budget for the
+     *  connected strap, read through prefs on every use.
+     *
+     *  Was a field, and the field was the bug: the foreground service restarts, the count went back to
+     *  zero, and the probe bought three more link-killing attempts on a strap that had already answered
+     *  the same way three times (18 starts across 24 connects, 31 Aug). Reading it through prefs is a
+     *  handful of cheap lookups per link and leaves exactly one source of truth.
+     *
+     *  Held by [PuffinExperiment] rather than `NoopPrefs`, unlike the refusal latch beside it: the switch's
+     *  setter clears these budgets by prefix and can only sweep its own prefs file. */
+    private val unbondedProbeSilentLinks: Int
+        get() = runCatching {
+            PuffinExperiment.from(context).unbondedProbeSilentLinks(lastDeviceAddress)
+        }.getOrDefault(0)
+
+    private fun setUnbondedProbeSilentLinks(value: Int) {
+        runCatching { PuffinExperiment.from(context).setUnbondedProbeSilentLinks(lastDeviceAddress, value) }
+    }
 
     /** True when the user asked to disconnect; suppresses the auto-rescan (Swift `intentionalDisconnect`).
      *  Written on the main looper (connect/disconnect/keep-alive bounce) and read on the GATT binder
@@ -3666,6 +3685,11 @@ class WhoopBleClient(
             // handshake on a re-add and leaving a stale pref behind for a strap the user removed.
             // Re-latching costs the same five refusals it always did. Twin of the Swift `forgetDevice`.
             runCatching { com.noop.ui.NoopPrefs.setHelloSuppressed(context, releasedAddress, false) }
+            // #1635: clearing the latch means the pairing request is asked again, so its one-shot line has
+            // to be able to report the next retirement. Twin of the reset in [clearPairingHint]; without
+            // it a re-added strap stops asking with nothing in the log saying why, which is the silent
+            // stop this whole area exists to stop repeating.
+            explicitBondGiveUpLogged = false
             autoReconnectPausedForBondLoop = false
             bondLoopPausedAtMs = null
             // Drop the persisted last-device pin so a relaunch / radio-on doesn't auto-reconnect to it (#67).
@@ -4851,6 +4875,21 @@ class WhoopBleClient(
     }
 
     /**
+     * Charge one link that subscribed the puffin characteristics and produced no answer, retiring the
+     * probe for this strap when the budget runs out.
+     *
+     * Both the "asked and heard nothing" path and the "link died mid-probe" path end here, and they must:
+     * a quiet link and a link torn down by the very subscriptions we wrote are the same evidence about
+     * this strap. Counting only the first is how the probe kept re-running across 24 connects.
+     */
+    private fun chargeUnbondedProbeSilence() {
+        val spent = unbondedProbeSilentLinks + 1
+        setUnbondedProbeSilentLinks(spent)
+        if (unbondedProbeStillWorthAsking(spent)) return
+        log(unbondedProbeGaveUpLine(spent))
+    }
+
+    /**
      * Stage 2: the subscriptions landed, so ask the strap a read-only question.
      *
      * GET_CLOCK and not GET_DATA_RANGE, and certainly not SET_CLOCK. It changes nothing on the strap, so a
@@ -4898,22 +4937,20 @@ class WhoopBleClient(
                 waitedMs = waited,
                 sawNotifications = unbondedProbeEvidence == UnbondedProbeEvidence.SERVES_NOTIFICATIONS,
             ))
-            // Not latched per device: the subscriptions were accepted, so this says the strap did not
+            // Not the refusal latch: the subscriptions were accepted, so this says the strap did not
             // answer THIS time, and the carve-out the refusal path makes for a pairing in flight would
-            // apply here with less certainty, not more. Once-per-LINK does not bound it, though — the
-            // probe re-runs on every reconnect — so silence spends a per-process budget instead of writing
-            // a permanent verdict from an ambiguous result.
-            unbondedProbeSilentLinks++
-            if (!unbondedProbeStillWorthAsking(unbondedProbeSilentLinks)) {
-                log(unbondedProbeGaveUpLine(unbondedProbeSilentLinks))
-            }
+            // apply here with less certainty, not more. Once-per-LINK does not bound it either — the probe
+            // re-runs on every reconnect — so silence spends a budget rather than writing a verdict from
+            // an ambiguous result. The budget is persisted, because the process is not a bound.
+            chargeUnbondedProbeSilence()
             return
         }
         log(unbondedProbeAnsweredLine())
         log(unbondedProbeBacklogCaveatLine())
         // A genuine answer clears the silence budget: whatever the quiet links were, they were not this
-        // strap declining to talk, and a later reconnect must not inherit their count.
-        unbondedProbeSilentLinks = 0
+        // strap declining to talk, and a later reconnect — or a later app launch — must not inherit
+        // their count.
+        setUnbondedProbeSilentLinks(0)
         // The proven 5/MG handshake tail, minus the hello that cannot happen: clock the strap, then offload.
         // Clock-before-history is mandatory — an un-clocked 5/MG discards sensor data rather than banking it
         // — and it is only reached here because the strap has just demonstrated it answers commands.
@@ -5565,8 +5602,14 @@ class WhoopBleClient(
      *  off the involuntary-reconnect path on purpose: the streak must SURVIVE automatic reconnects (like
      *  the #52 pinnedBondRefusals counter) so it can accumulate to the threshold across the strap dropping
      *  and re-bonding. Only an explicit user tap (AppViewModel.connect) starts it over. Public so the
-     *  ViewModel can call it; a thin wrapper over the private [clearPairingHint]. */
-    fun clearPairingHintForUserConnect() = clearPairingHint()
+     *  ViewModel can call it; a thin wrapper over the private [clearPairingHint].
+     *
+     *  #1635: does NOT drop the hello-suppression latch. The fresh handshake attempt a Connect grants is
+     *  carried by [helloRetryRequested], not by clearing the latch, so keeping it costs the user nothing —
+     *  and clearing it un-suppressed every AUTOMATIC reconnect that followed, which is what re-paid the
+     *  full five refusals on every tap. Apple has always cleared it on a genuine bond and on forget only;
+     *  this is the twin of that. */
+    fun clearPairingHintForUserConnect() = clearPairingHint(genuineBond = false)
 
     /** Bonded-handshake watchdog (#50): every other connect phase has a timeout (scan; MTU settle delay;
      *  keep-alive) but the post-discovery bond/CCCD handshake had none — so a WHOOP 4.0 that wedges
@@ -5864,11 +5907,21 @@ class WhoopBleClient(
 
     /** Clear the pairing-hint streak + published hint after a genuine bond or a fresh connect. Also clears
      *  the mirrored [statusNote] only when it still carries the hint, so we never wipe an unrelated note. */
-    private fun clearPairingHint() {
+    private fun clearPairingHint(genuineBond: Boolean = true) {
         bondRefusalStreak = 0
         // #1635: a genuine bond proves the handshake works on this strap — drop the suppression latch so a
         // later transient failure starts from a clean slate rather than inheriting an old verdict.
-        runCatching { com.noop.ui.NoopPrefs.setHelloSuppressed(context, lastDeviceAddress, false) }
+        //
+        // Only a genuine bond. A user Connect passes false: it already gets its fresh attempt from
+        // [helloRetryRequested], and dropping the latch as well left every automatic reconnect after that
+        // attempt un-suppressed, so the give-up had to re-earn itself over five more refusals — ~55s of
+        // link churn per tap, on a strap whose firmware cannot answer the handshake either way.
+        if (pairingHintClearDropsSuppressionLatch(genuineBond)) {
+            runCatching { com.noop.ui.NoopPrefs.setHelloSuppressed(context, lastDeviceAddress, false) }
+        }
+        // #1635: the pairing request is asked again from here too, so its one-shot line must be able to
+        // report a SECOND retirement. Without this the switch would go quiet for good after one round.
+        explicitBondGiveUpLogged = false
         // #747/#750: a genuine bond or a fresh user connect re-arms auto-reconnect and clears the give-up.
         bondGiveUp.reset()
         // #971: a genuine bond or a fresh user connect also clears the bond-watchdog bounce streak, so the
@@ -8329,12 +8382,36 @@ class WhoopBleClient(
                     scheduleUnbondedOffloadProbe()
                     return
                 }
+                // Read ONCE, here, above both decisions that consult it. The pairing request is made
+                // before the hello is considered, so a latch read only at the hello would leave the
+                // request unable to see the verdict it is supposed to respect.
+                //
+                // This is only safe because NOTHING between here and the hello writes the latch, and that
+                // became true when the pairing request stopped clearing it. Anything reintroducing a write
+                // in that window silently hands the hello a stale verdict — so put the write before this
+                // read, or take a second one, rather than leaving the two decisions disagreeing.
+                val suppressed = runCatching {
+                    com.noop.ui.NoopPrefs.helloSuppressed(context, g.device.address)
+                }.getOrDefault(false)
                 if (shouldRequestExplicitBond(
                         optedIn = puffinExperiment.explicitBond,
                         isWhoop5 = true,
                         alreadyBondedAtOsLevel = osBonded,
                         appLevelBonded = didBond,
                         alreadyRequestedThisLink = explicitBondRequestedThisLink,
+                        // #1635: deliberately the raw latch, with no `userInitiated` escape hatch beside
+                        // the hello's. A Connect used to re-fire createBond only as a side effect of
+                        // clearing the latch; now that the latch survives the tap, the pairing request
+                        // stays retired and the tap's one fresh attempt is the HELLO. That is the right
+                        // half to keep — the hello is the implicit pairing trigger, so a strap put into
+                        // pairing mode still has a route, while each createBond this strap declines
+                        // raises a system "Pairing rejected" notice the user never asked for.
+                        //
+                        // Do NOT "fix" this by passing `suppressed && !helloRetryRequested`. The deferral
+                        // branch below returns BEFORE the hello consumes that flag, so a re-armed request
+                        // would defer the hello, leave the retry set, and re-arm itself on the next link.
+                        // A full pairing retry is Forget + re-add, which clears the latch outright.
+                        bondGivenUpForDevice = suppressed,
                     )
                 ) {
                     explicitBondRequestedThisLink = true
@@ -8346,15 +8423,50 @@ class WhoopBleClient(
                     runCatching { g.device.createBond() }.fold(
                         onSuccess = { initiated ->
                             log(explicitBondRequestLine(initiated, where))
-                            // Asking for a pairing voids the previous verdict: suppression latched because
-                            // the write never completed on an UNENCRYPTED link, and that premise is exactly
-                            // what this is trying to change. Cleared ONCE, here, rather than re-armed by
-                            // "an OS pairing exists" — that condition never goes away, so it would bypass
-                            // the latch on every connect and restore the unbounded loop for good.
+                            // The suppression latch is NOT cleared here, and this is the correction to the
+                            // comment that used to stand in its place. That comment reasoned the clear was
+                            // safe because it happened "ONCE, here", as opposed to being re-armed by "an OS
+                            // pairing exists" — a condition that never goes away. It guarded the wrong
+                            // recurrence. [shouldRequestExplicitBond] is bounded only by
+                            // `alreadyRequestedThisLink`, a per-LINK flag, and on a strap that answers SMP
+                            // "Pairing Not Supported" neither bond condition ever becomes true — so
+                            // createBond fires on EVERY connect, and clearing here fired on every connect
+                            // with it. The 31 Aug capture: 18 pairing requests and 18 hellos — one of each
+                            // on every link, which is the pairing [helloDeferredByExplicitBond] forbids —
+                            // with the latch written once at 17:32:48, the "CLIENT_HELLO suppressed" line
+                            // zero times, and 13 of those hellos landing after the give-up, each dropping
+                            // the link ~4.8s in.
+                            //
+                            // It could not recover, either: BondRefusalGiveUp.recordRefusal() reports the
+                            // crossing exactly once and stays gaveUp until reset, so the latch is written
+                            // once per session. Anything recurring that clears it does not cost one link —
+                            // it costs the latch permanently.
+                            //
+                            // What replaces it is the explicit Connect, which grants ONE fresh handshake
+                            // attempt through [helloRetryRequested] — precisely what the epitaph tells the
+                            // user to do, and pinned by HelloSuppressionTest's "suppression is never
+                            // permanent". Note it is the retry flag that carries this, NOT a clear of the
+                            // latch: clearPairingHintForUserConnect() deliberately leaves the latch set so
+                            // the automatic reconnects AFTER that attempt stay suppressed. Be exact about
+                            // the alternative: the encrypted-bond clear at clearPairingHint() lives inside
+                            // the hello WRITE-COMPLETION callback, so a suppressed hello cannot reach it.
+                            // Claiming it as an automatic route would be the same overclaim the give-up
+                            // line just had to be corrected for.
+                            //
+                            // That costs nothing real. The latch is only set after five consecutive
+                            // refusals, so "latched, and pairing now works" needs something to have
+                            // CHANGED — new firmware, the strap put into pairing mode (@Zebsi235's MG) —
+                            // and a user who has changed something taps Connect. Voiding the verdict on
+                            // the mere REQUEST voided it on a hope this strap never fulfils, every eleven
+                            // seconds. The pairing experiment itself is untouched in the window that
+                            // matters: createBond runs on every link until the latch is set, and it no
+                            // longer drags the hello back with it, which is what
+                            // [helloDeferredByExplicitBond] says must never share a link. Be precise
+                            // about after: `bondGivenUpForDevice = suppressed` retires the request for as
+                            // long as the latch stands, and since the latch now survives a Connect, the
+                            // way back is a genuine bond or Forget + re-add — not a tap. The field log
+                            // read as "createBond on every link" only because every tap wiped the latch.
                             if (initiated) {
-                                runCatching {
-                                    com.noop.ui.NoopPrefs.setHelloSuppressed(context, g.device.address, false)
-                                }
                                 // Ask the device directly rather than waiting on our own broadcast
                                 // receiver, which is a suspect in exactly the silence being investigated.
                                 handler.postDelayed({
@@ -8366,6 +8478,24 @@ class WhoopBleClient(
                         },
                         onFailure = { log(explicitBondThrewLine(it.javaClass.simpleName, where)) },
                     )
+                } else if (suppressed && !explicitBondGiveUpLogged && shouldRequestExplicitBond(
+                        optedIn = puffinExperiment.explicitBond,
+                        isWhoop5 = true,
+                        alreadyBondedAtOsLevel = osBonded,
+                        appLevelBonded = didBond,
+                        alreadyRequestedThisLink = explicitBondRequestedThisLink,
+                        // The question this branch is actually asking: would we be asking to pair if the
+                        // give-up were not latched? Restating the gate's other conditions here instead
+                        // would drift the moment a sixth one is added — and drift silently, into a line
+                        // that blames the give-up for a decision some other check made.
+                        bondGivenUpForDevice = false,
+                    )
+                ) {
+                    // Say it, once. The switch is on and doing nothing, which without a line looks exactly
+                    // like the switch being broken — and the user has just been reading Android's pairing
+                    // rejections, so they are owed the app's side of it.
+                    explicitBondGiveUpLogged = true
+                    log(explicitBondGivenUpLine())
                 }
                 // #1635: read once, before the deferral gate — the override has to reach BOTH, or a
                 // deferred hello returns early and the switch below is never evaluated at all.
@@ -8427,9 +8557,6 @@ class WhoopBleClient(
                 // restart the loop the suppression exists to end.
                 val userAsked = helloRetryRequested
                 helloRetryRequested = false
-                val suppressed = runCatching {
-                    com.noop.ui.NoopPrefs.helloSuppressed(context, g.device.address)
-                }.getOrDefault(false)
                 if (shouldSendClientHello(suppressed, userInitiated = userAsked, overrideSuppression = helloOverride)) {
                     // Charge the budget only when the override is what put this hello on the wire: a
                     // strap that is neither suppressed nor deferring would have sent it anyway, and
@@ -8455,6 +8582,22 @@ class WhoopBleClient(
                     log("WHOOP 5/MG: CLIENT_HELLO suppressed for this strap — it was never acknowledged and" +
                         " the write is what drops the link. Staying on live HR (not fully paired); press" +
                         " Connect to try the handshake again (#1635).")
+                    // #221: republish the pairing hint, which the Devices card's "Connected · not paired"
+                    // pill reads. It is otherwise written only where a refusal FRESHLY crosses the give-up,
+                    // and the latch that records the give-up outlives the process while the hint did not —
+                    // so every launch after the one that gave up showed a green "Active · Live" beside a
+                    // feature list naming Sleep, Strain and HRV, on a strap that has never banked a row.
+                    // Placed HERE, next to the line reporting the same fact, because Swift already does
+                    // exactly this (BLEManager.swift, the matching suppression branch): the gap was
+                    // one-sided, and this closes it rather than inventing a second placement.
+                    //
+                    // Assigned, not seeded. A first attempt kept any hint already published, on the
+                    // reasoning that a live observation beats a remembered one — but the only hint that can
+                    // be present here came from a PREVIOUS link, since refusals are detected on teardown
+                    // and this runs during setup. A stale hint about a condition that may no longer hold
+                    // is not the fresher fact; the state of the link in hand is. Swift assigns for the
+                    // same reason, and mirrored code diverging quietly is worse than either choice.
+                    _state.update { it.copy(pairingHint = BondRefusalGiveUp.helloSuppressedHint()) }
                     // The unbonded DIS attempt rides HERE, on the suppressed link, and nowhere else. This
                     // is the only 5/MG state known to be stable: the handshake is off, the watchdog is
                     // cancelled, and the link holds. During the reconnect loop it would have ~4.8s and
@@ -9868,10 +10011,7 @@ class WhoopBleClient(
                         System.currentTimeMillis() - unbondedProbeAskedAtMs else -1L,
                 ),
             )
-            unbondedProbeSilentLinks++
-            if (!unbondedProbeStillWorthAsking(unbondedProbeSilentLinks)) {
-                log(unbondedProbeGaveUpLine(unbondedProbeSilentLinks))
-            }
+            chargeUnbondedProbeSilence()
         }
         unbondedProbeStartedThisLink = false
         unbondedProbeDeferrals = 0

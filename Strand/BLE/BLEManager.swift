@@ -1426,6 +1426,12 @@ public final class BLEManager: NSObject, ObservableObject {
 
     // MARK: Public API
 
+    /// Give buffered standard-HR rows a persistence attempt before app suspension/termination.
+    /// Kept on BLEManager so the app lifecycle reaches the live Collector owned by this connection.
+    func flushStandardHRForLifecycle(reason: LivePersistTrace.StandardHRFlushReason) async {
+        await collector?.flushStandardHR(reason: reason)
+    }
+
     /// USER-initiated connect (the Connect button, the scan flow, Add-a-WHOOP). The ONLY entry that
     /// re-arms a bond-loop give-up: a user gesture is an explicit "try again", so the streak + pause
     /// clear and auto-reconnect works again if it bonds. System-initiated paths (Bluetooth poweredOn,
@@ -1443,8 +1449,13 @@ public final class BLEManager: NSObject, ObservableObject {
         }
         // #1635: the suppression path pauses NOTHING, so the reset above never fires for it. An explicit
         // Connect is exactly the signal that the user has acted (pairing mode, closed the WHOOP app), so
-        // it must grant a fresh handshake regardless — that is also the only way to clear the latch short
-        // of a genuine bond. Deliberately NOT in connectCore: a system-initiated reconnect must not.
+        // it must grant a fresh handshake regardless. Be exact about what that does and does not do: it
+        // grants ONE connect's worth of hello and leaves the latch standing, so if the strap still will
+        // not answer, the automatic reconnects behind this attempt stay suppressed. The latch is cleared
+        // by the attempt SUCCEEDING (didWriteValueFor's genuine ack) or by forgetDevice, never by the tap
+        // itself — Kotlin `pairingHintClearDropsSuppressionLatch` is the twin of that rule, and it had to
+        // be made one: clearing on the tap there re-paid the whole give-up on every press.
+        // Deliberately NOT in connectCore: a system-initiated reconnect must not.
         helloRetryRequested = true
         bondGiveUp.reset()
         connectCore(model: model)
@@ -5517,7 +5528,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         Task { @MainActor in await puffinRecorder.flush() }   // persist any buffered puffin capture frames
         puffinEventLog.close()   // release the event-log handle so the file is safe to export
         puffinDeepBufferLog.close()   // same for the high-rate deep-buffer log (#423)
-        Task { @MainActor in await collector?.flushStandardHR() }   // persist any buffered 0x2A37 HR
+        Task { @MainActor in await collector?.flushStandardHR(reason: .disconnect) }   // persist any buffered 0x2A37 HR
         if autoReconnectPausedForBondLoop {
             // #747: the bond keeps being refused, so auto-reconnect is paused: we stop hammering a strap that
             // can't bond (the epitaph + paused hint were already surfaced when the give-up tripped). The user
