@@ -764,7 +764,10 @@
     <string name="l10n_scoring_guide_screen_scorecardhighlight_4af6985c">Podświetlenie karty wyników</string>
     <string name="l10n_scoring_guide_screen_these_are_independent_approximations_from_a_301457ed">Są to niezależne przybliżenia z paska konsumenckiego, oparte na otwartej nauce: a nie porady medyczne ani oficjalne wyniki WHOOP.</string>
     <string name="l10n_scoring_guide_screen_vs_whoop_9a8126a7">VS WHOOP</string>
+    <string name="l10n_settings_screen_12_hour_41c18ba0">12-godzinny</string>
+    <string name="l10n_settings_screen_24_hour_18e86819">24-godzinny</string>
     <string name="l10n_settings_screen_advancedchevron_f22dfa01">zaawansowanyChevron</string>
+    <string name="l10n_settings_screen_clock_04f6b3ea">Zegar</string>
     <string name="l10n_settings_screen_note_a2481d6c">· %1$s</string>
     <string name="l10n_settings_screen_repo_note_0a694b50">%1$s, %2$s</string>
     <string name="l10n_skin_temp_cards_screen_cycle_awareness_ffb94783">Świadomość rowerowa</string>
@@ -2665,4 +2668,5 @@
     <string name="l10n_body_clock_dial_card_your_clock_1b91f5ee">Twój zegar</string>
     <string name="vo2max_method_change_caption">Linia jest przerwana tam, gdzie metoda szacowania zmieniła się lub nie została zapisana.</string>
     <string name="l10n_app_changelog_a_whoop_5_that_stays_connected_7b490eee">WHOOP 5, który nie traci połączenia, zegar biologiczny na ekranie snu i dziennik odróżniający Nie od braku wpisu</string>
+    <string name="l10n_app_changelog_choose_a_12_hour_clock_sleep_8a19db5c">Wybierz zegar 12-godzinny, sen z opasek bez danych o ruchu i dziennik, który przestaje zgadywać</string>
 </resources>

@@ -625,7 +625,10 @@
     <string name="l10n_scoring_guide_screen_scorecardhighlight_4af6985c">scoreCardHighlight</string>
     <string name="l10n_scoring_guide_screen_these_are_independent_approximations_from_a_301457ed">Ce sont des approximations indépendantes issues d\'un bracelet grand public, fondées sur la science ouverte : ni un conseil médical, ni les scores officiels de WHOOP.</string>
     <string name="l10n_scoring_guide_screen_vs_whoop_9a8126a7">VS WHOOP</string>
+    <string name="l10n_settings_screen_12_hour_41c18ba0">12 heures</string>
+    <string name="l10n_settings_screen_24_hour_18e86819">24 heures</string>
     <string name="l10n_settings_screen_advancedchevron_f22dfa01">avancéChevron</string>
+    <string name="l10n_settings_screen_clock_04f6b3ea">Horloge</string>
     <string name="l10n_settings_screen_note_a2481d6c">· %1$s</string>
     <string name="l10n_settings_screen_repo_note_0a694b50">%1$s, %2$s</string>
     <string name="l10n_skin_temp_cards_screen_cycle_awareness_ffb94783">Conscience du cycle</string>
@@ -2660,4 +2663,5 @@
     <string name="l10n_body_clock_dial_card_your_clock_1b91f5ee">Votre horloge</string>
     <string name="vo2max_method_change_caption">La courbe est interrompue là où la méthode d’estimation a changé ou n’a pas été enregistrée.</string>
     <string name="l10n_app_changelog_a_whoop_5_that_stays_connected_7b490eee">Une WHOOP 5 qui reste connectée, votre horloge interne sur l\'écran Sommeil, et un journal qui distingue Non de rien</string>
+    <string name="l10n_app_changelog_choose_a_12_hour_clock_sleep_8a19db5c">Choisissez l\'horloge 12 heures, le sommeil depuis des bracelets sans données de mouvement, et un journal qui cesse de deviner</string>
 </resources>
