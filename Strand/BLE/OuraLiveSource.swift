@@ -13,6 +13,30 @@ import UIKit
 import AppKit
 #endif
 
+/// The label a discovered ring is listed under: its advertised local name, or `fallback` when it did
+/// not advertise one.
+///
+/// A BONDED ring routinely stops advertising a local name, so the blank case is the NORMAL case for the
+/// ring a user most wants to reconnect to (#1776), not an error path — the scan's service filter is the
+/// only gate and the name is a label. Callers therefore never see an empty `DiscoveredRing.name`, which
+/// is why the wizard renders it unguarded on both platforms (#1783 reads that as a missing guard; the
+/// guard is here, at the single construction site).
+///
+/// BLANK, not empty. The Kotlin twin is `ouraAdvertisedLabel` in `ble/OuraLiveSource.kt`, built on
+/// `ifBlank`, which treats an all-whitespace name as absent. `isEmpty` does not, so a ring advertising
+/// `" "` would have listed blank here and as "Oura" there — the exact silent Swift/Kotlin divergence the
+/// parity contract calls out. Both sides now treat whitespace as absent and return the name UNTRIMMED
+/// when it is present. Pinned by the Kotlin `OuraNamelessRingDiscoveryTest` against this function's own
+/// output. The two agree over ASCII whitespace, ordinary names, and U+00A0. `ifBlank` does NOT test
+/// `Character.isWhitespace`, which would indeed exclude U+00A0; it tests Kotlin's `Char.isWhitespace`,
+/// defined as `Character.isWhitespace(c) || Character.isSpaceChar(c)`, and the second disjunct restores
+/// every non-breaking space the first drops. The pair parts only on U+0085 (blank here, not in Kotlin)
+/// and U+001C–U+001F (blank in Kotlin, not here), which no BLE local name carries — stated rather than
+/// silently overclaimed.
+func ouraAdvertisedLabel(_ advertisedName: String, fallback: String) -> String {
+    advertisedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : advertisedName
+}
+
 /// EXPERIMENTAL, ISOLATED live-BLE source for the Oura ring (gen 3/4/5), driven by the clean-room
 /// `OuraProtocol.OuraDriver`.
 ///
@@ -2212,9 +2236,9 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         let id = peripheral.identifier
         let firstSight = seenPeripherals[id] == nil
         seenPeripherals[id] = peripheral
-        if firstSight { log("Oura: found \(name.isEmpty ? "Oura ring" : name) (\(id)) rssi \(RSSI.intValue)") }
+        if firstSight { log("Oura: found \(ouraAdvertisedLabel(name, fallback: "Oura ring")) (\(id)) rssi \(RSSI.intValue)") }
         let ring = DiscoveredRing(id: id,
-                                  name: name.isEmpty ? "Oura" : name,
+                                  name: ouraAdvertisedLabel(name, fallback: "Oura"),
                                   rssi: RSSI.intValue,
                                   detectedGen: detectedGen)
         if let idx = discovered.firstIndex(where: { $0.id == id }) {

@@ -129,7 +129,23 @@ internal fun backfillDeferredLine(
  * The pair that matters is offered vs inserted. [standardHrFlushAttemptLine] reports what was handed to
  * the store and [standardHrFlushSucceededLine] what the store actually took, because a batch that is
  * offered in full and inserted as zero is precisely the failure that otherwise reads like success.
+ *
+ * [standardHrHostReceivedLine], which this block documents, is the earliest of them. Apple emits it
+ * from `Collector.ingestStandardHR` for every reading, so Android emits it from
+ * `StandardHrSource.enqueue` at the same per-reading cadence rather than only at a flush boundary.
  */
+internal fun standardHrHostReceivedLine(
+    hostUnixSeconds: Int,
+    acceptedHrRows: Int, acceptedRrRows: Int,
+    rejectedHrRows: Int, rejectedRrRows: Int,
+    pendingHrRows: Int, pendingRrRows: Int,
+): String =
+    "standard-hr transport host-received hostUnixSec=$hostUnixSeconds" +
+        " acceptedHRRows=$acceptedHrRows acceptedRRRows=$acceptedRrRows" +
+        " rejectedHRRows=$rejectedHrRows rejectedRRRows=$rejectedRrRows" +
+        " pendingHRRows=$pendingHrRows pendingRRRows=$pendingRrRows"
+
+/** Twin of Swift `LivePersistTrace.standardHRFlushAttemptLine`. */
 internal fun standardHrFlushAttemptLine(
     reason: String,
     offeredHrRows: Int,
@@ -204,6 +220,8 @@ internal fun liveInsertFailedLine(
     rrFrames: Int,
     consecutiveFailures: Int,
 ): String {
+    // Bound is ASCII-only (store errors). Kotlin `take(200)` is UTF-16 code units; Swift `prefix(200)`
+    // is grapheme clusters. They agree on ASCII, which is the load-bearing case — not a Unicode twin.
     val detail = message?.takeIf { it.isNotBlank() }?.let { ": ${it.take(200)}" } ?: ""
     val run = if (consecutiveFailures >= 2) {
         " $consecutiveFailures consecutive failures — these rows are not landing and the re-buffer is" +
