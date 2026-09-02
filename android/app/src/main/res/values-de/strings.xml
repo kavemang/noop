@@ -708,11 +708,14 @@
     <string name="l10n_mind_section_reading_your_check_ins_71a100a9">Lesen Sie Ihre Check-ins...</string>
     <string name="l10n_noop_compact_glance_widget_charge_49a8cb83">GEBÜHR</string>
     <string name="l10n_noop_compact_glance_widget_effort_660752e7">ANSTRENGUNG</string>
+    <string name="l10n_noop_compact_glance_widget_heart_rate_410aa15c">Herzfrequenz</string>
     <string name="l10n_noop_compact_glance_widget_rest_cbaaa181">RUHE</string>
     <string name="l10n_noop_compact_glance_widget_strap_battery_a6c7f09c">Strap-Akku</string>
     <string name="l10n_noop_glance_widget_charge_49a8cb83">GEBÜHR</string>
     <string name="l10n_noop_glance_widget_effort_660752e7">ANSTRENGUNG</string>
+    <string name="l10n_noop_glance_widget_heart_rate_410aa15c">Herzfrequenz</string>
     <string name="l10n_noop_glance_widget_rest_cbaaa181">RUHE</string>
+    <string name="l10n_noop_glance_widget_strap_battery_a6c7f09c">Strap-Akku</string>
     <string name="l10n_notifications_settings_screen_02d_02d_ce23a78c">%1$02d:%2$02d</string>
     <string name="l10n_notifications_settings_screen_all_other_apps_51a8af2c">Alle anderen Apps</string>
     <string name="l10n_notifications_settings_screen_app_name_wrist_alerts_dd3540fa">%1$s-Handgelenkwarnungen</string>
@@ -1490,6 +1493,7 @@
     <string name="l10n_settings_screen_broadcast_strap_hr_garmin_ant_a39d0654">Sendeband HR (Garmin/ANT)</string>
     <string name="l10n_settings_screen_buzz_the_time_on_your_strap_06fc879d">Buzz die Zeit auf Ihrem Gurt</string>
     <string name="l10n_settings_screen_cancel_77dfd213">Abbrechen</string>
+    <string name="l10n_settings_screen_restore_3cbe6d6b">Wiederherstellen</string>
     <string name="l10n_settings_screen_card_transparency_c5c7b4f3">Kartentransparenz</string>
     <string name="l10n_settings_screen_charge_d4e1aee4">Ladung</string>
     <string name="l10n_settings_screen_charge_effort_and_rest_and_how_d2c423a4">Ladung, Anstrengung und Ruhe und wie sie sich von WHOOP unterscheiden</string>

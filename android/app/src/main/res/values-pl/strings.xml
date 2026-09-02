@@ -665,11 +665,14 @@
     <string name="l10n_mind_section_reading_your_check_ins_71a100a9">Czytanie Twoich meldowań…</string>
     <string name="l10n_noop_compact_glance_widget_charge_49a8cb83">OPŁATA</string>
     <string name="l10n_noop_compact_glance_widget_effort_660752e7">WYSIŁEK</string>
+    <string name="l10n_noop_compact_glance_widget_heart_rate_410aa15c">Tętno</string>
     <string name="l10n_noop_compact_glance_widget_rest_cbaaa181">ODPOCZYNEK</string>
     <string name="l10n_noop_compact_glance_widget_strap_battery_a6c7f09c">Bateria na pasek</string>
     <string name="l10n_noop_glance_widget_charge_49a8cb83">OPŁATA</string>
     <string name="l10n_noop_glance_widget_effort_660752e7">WYSIŁEK</string>
+    <string name="l10n_noop_glance_widget_heart_rate_410aa15c">Tętno</string>
     <string name="l10n_noop_glance_widget_rest_cbaaa181">ODPOCZYNEK</string>
+    <string name="l10n_noop_glance_widget_strap_battery_a6c7f09c">Bateria na pasek</string>
     <string name="l10n_notifications_settings_screen_02d_02d_ce23a78c">%1$02d:%2$02d</string>
     <string name="l10n_notifications_settings_screen_all_other_apps_51a8af2c">Wszystkie inne aplikacje</string>
     <string name="l10n_notifications_settings_screen_app_name_wrist_alerts_dd3540fa">Alerty na nadgarstku %1$s</string>
@@ -1447,6 +1450,7 @@
     <string name="l10n_settings_screen_broadcast_strap_hr_garmin_ant_a39d0654">Pasek nadawczy HR (Garmin/ANT)</string>
     <string name="l10n_settings_screen_buzz_the_time_on_your_strap_06fc879d">Zasygnalizuj godzinę na pasku</string>
     <string name="l10n_settings_screen_cancel_77dfd213">Anuluj</string>
+    <string name="l10n_settings_screen_restore_3cbe6d6b">Przywrócić</string>
     <string name="l10n_settings_screen_card_transparency_c5c7b4f3">Przejrzystość karty</string>
     <string name="l10n_settings_screen_charge_d4e1aee4">Energia</string>
     <string name="l10n_settings_screen_charge_effort_and_rest_and_how_d2c423a4">Energia, Wysiłek i Odpoczynek oraz czym różnią się od WHOOP</string>
