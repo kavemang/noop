@@ -227,6 +227,7 @@ struct TodayView: View {
     /// `MetricExplorerView`, Liquid Today): the explicit override when set, else derived from the unit
     /// system. This screen used to print a bare `%+.1f°` and was the last one ignoring the preference.
     @AppStorage(UnitPrefs.temperatureKey) private var temperatureRaw = ""
+    @AppStorage(UnitPrefs.skinTempDisplayKey) private var skinTempDisplayRaw = ""   // #1846
     private var temperatureUnit: TemperatureUnit {
         UnitPrefs.resolveTemperature(system: unitSystem, override: temperatureRaw)
     }
@@ -590,10 +591,43 @@ struct TodayView: View {
         return Repository.lastSpo2Day(days: repo.days, todayKey: displayDay?.day ?? selectedDayKey)
     }
 
-    /// PER-FIELD skin-temperature-deviation carry — twin of `lastSpo2Day`; mirrors the Android `lastSkinTempRow`.
-    private var lastSkinTempDay: DailyMetric? {
+    /// PER-FIELD HRV carry — twin of `lastSpo2Day` for a field `lastVitalsDay`'s OR predicate checks but can
+    /// still resolve nil on: it picks the freshest row with ANY vital, so a respiratory-only row blanks HRV
+    /// (#1842). Mirrors the Android `lastHrvRow`.
+    private var lastHrvDay: DailyMetric? {
         guard selectedDayOffset == 0 else { return nil }
-        return Repository.lastSkinTempDay(days: repo.days, todayKey: displayDay?.day ?? selectedDayKey)
+        return Repository.lastHrvDay(days: repo.days, todayKey: displayDay?.day ?? selectedDayKey)
+    }
+
+    /// PER-FIELD resting-HR carry — twin of `lastHrvDay`. Mirrors the Android `lastRestingHrRow`.
+    private var lastRestingHrDay: DailyMetric? {
+        guard selectedDayOffset == 0 else { return nil }
+        return Repository.lastRestingHrDay(days: repo.days, todayKey: displayDay?.day ?? selectedDayKey)
+    }
+
+    /// The carry for the surfaces that LEAD WITH THE ABSOLUTE (#1844): the freshest strictly-prior row
+    /// holding EITHER skin-temp number, so a calibrating night — real temperature, no deviation yet — is
+    /// found instead of being skipped for an older deviation. Mirrors the Android `lastSkinTempReadingRow`.
+    private var lastSkinTempReadingDay: DailyMetric? {
+        guard selectedDayOffset == 0 else { return nil }
+        return Repository.lastSkinTempReadingDay(days: repo.days, todayKey: displayDay?.day ?? selectedDayKey)
+    }
+
+    /// The skin-temp reading a Today surface leads with: today's row if it has either number, else the
+    /// carry. Both numbers always come off the SAME row, so an absolute is never paired with another
+    /// night's deviation.
+    private var skinTempLeadReading: SkinTempDisplay.Reading? {
+        let row = [displayDay, lastVitalsDay, lastSkinTempReadingDay]
+            .compactMap { $0 }
+            .first { $0.skinTempC != nil || $0.skinTempDevC != nil }
+        return SkinTempDisplay.leadReading(absC: row?.skinTempC, devC: row?.skinTempDevC,
+                                           prefer: skinTempPreferred)
+    }
+
+    /// The user's Settings choice (#1846), resolved from the stored raw. Absent/unrecognised reads as
+    /// `.absolute`, so an install that never opens Settings behaves exactly as before the setting existed.
+    private var skinTempPreferred: SkinTempDisplay.Kind {
+        SkinTempDisplay.Kind(rawValue: skinTempDisplayRaw) ?? .absolute
     }
 
     /// PER-FIELD respiratory carry, and the only one of these that is STALENESS-BOUNDED
@@ -2574,12 +2608,18 @@ struct TodayView: View {
             #if DEBUG
             if let f = DemoDayHarness.active { return withUnit("\(f.hrvMs)") }
             #endif
-            return withUnit(d?.avgHrv.map { "\(Int($0.rounded()))" } ?? "—")
+            // PER-FIELD carry: today → the freshest prior row that actually HAS an HRV (#1842). Was
+            // today-only, so this card blanked to "—" every rollover while the Key Metrics tile — which
+            // has carried via `carriedVital(perField:)` all along — showed a number on the same screen.
+            // Not the whole-row `lastVitalsDay`: its OR predicate resolves nil HRV on a respiratory-only
+            // row. Mirrors the Android dashboardCardValue.
+            return withUnit((d?.avgHrv ?? lastHrvDay?.avgHrv).map { "\(Int($0.rounded()))" } ?? "—")
         case .restingHr:
             #if DEBUG
             if let f = DemoDayHarness.active { return withUnit("\(f.rhrBpm)") }
             #endif
-            return withUnit(d?.restingHr.map { "\($0)" } ?? "—")
+            // PER-FIELD carry — twin of `.hrv` above (#1842).
+            return withUnit((d?.restingHr ?? lastRestingHrDay?.restingHr).map { "\($0)" } ?? "—")
         case .respiratory:
             // PER-FIELD carry: today → the STALENESS-BOUNDED prior night (`lastRespDay`). Recovery-
             // independent, so a night with real R-R but a null recovery still carries.
@@ -2618,9 +2658,9 @@ struct TodayView: View {
             // deviation, and converts a DELTA by the scale factor alone rather than the absolute formula.
             // The card's own unit is deliberately empty — the value carries "°C" / "Δ°F" itself.
             // Same per-field carry as Blood Oxygen; both are sparse enough that an old reading is honest.
-            return Self.skinTempCardValue(
-                d?.skinTempDevC ?? lastVitalsDay?.skinTempDevC ?? lastSkinTempDay?.skinTempDevC,
-                fahrenheit: temperatureUnit == .fahrenheit)
+            // #1844: lead with the night's measured ABSOLUTE when it has one (the #1665 rule, applied
+            // here too) — a deviation with no anchor cannot be read. Deviation-only nights are unchanged.
+            return Self.skinTempCardValue(reading: skinTempLeadReading, fahrenheit: temperatureUnit == .fahrenheit)
         case .sleep:
             return sleepValue(d)
         case .steps:
@@ -2793,16 +2833,26 @@ struct TodayView: View {
         // falls back to the last night that recorded THAT vital (`lastVitalsDay`, recovery-INDEPENDENT — a
         // night with real HRV/RHR but a null recovery is a valid source, which the old `lastScoredRecoveryDay`
         // row-swap skipped). Today's own value always wins the instant it lands.
+        // ...and PER FIELD means per field: `lastVitalsDay`'s predicate is an OR across the three, so it
+        // resolves the freshest row with ANY of them and blanks a vital that row happens to lack (#1842).
+        let hd = lastHrvDay
+        let rd = lastRestingHrDay
         let vd = lastVitalsDay
-        let hrv = d?.avgHrv ?? vd?.avgHrv
-        let rhr = d?.restingHr ?? vd?.restingHr
+        let hrv = d?.avgHrv ?? hd?.avgHrv
+        let rhr = d?.restingHr ?? rd?.restingHr
         let resp = d?.respRateBpm ?? vd?.respRateBpm
         // The provenance row a shown vital fell back to (nil when every shown vital is today's own): stamps
         // that row's own date, so the footnote can't claim "Last night" for a value that IS today's.
-        let carriedFromHrv = d?.avgHrv == nil && vd?.avgHrv != nil
-        let carriedFromRhr = d?.restingHr == nil && vd?.restingHr != nil
-        let carriedFromResp = d?.respRateBpm == nil && vd?.respRateBpm != nil
-        let provenance: DailyMetric? = (carriedFromHrv || carriedFromRhr || carriedFromResp) ? vd : nil
+        // Each vital can now carry from a DIFFERENT row, so the one card-level footnote stamps the OLDEST
+        // row any SHOWN carried vital came from. Erring old is the only safe direction for a caption whose
+        // job is to stop a stale read passing as today's, and it keeps `carriedCaption`'s "Latest sleep"
+        // relabel (#779) firing on the value that actually is weeks old. A row is only a source if it
+        // SUPPLIED the value — `vd` can hold a nil respiratory, which carries nothing and stamps nothing.
+        let carriedFromHrv: DailyMetric? = (d?.avgHrv == nil && hd?.avgHrv != nil) ? hd : nil
+        let carriedFromRhr: DailyMetric? = (d?.restingHr == nil && rd?.restingHr != nil) ? rd : nil
+        let carriedFromResp: DailyMetric? = (d?.respRateBpm == nil && vd?.respRateBpm != nil) ? vd : nil
+        let sources: [DailyMetric] = [carriedFromHrv, carriedFromRhr, carriedFromResp].compactMap { $0 }
+        let provenance: DailyMetric? = sources.min(by: { $0.day < $1.day })
         NoopCard(tint: StrandPalette.chargeColor) {
             VStack(spacing: 0) {
                 // DEBUG promo harness: pin HRV / Resting HR to the active frame's values. No-op otherwise.
@@ -3853,10 +3903,10 @@ struct TodayView: View {
             // already a "Your Cards" tile (`DashboardCard.skinTemp`), never a Key Metrics one. Reuses the
             // SAME value chain and `skinTempCardValue` formatter the "Your Cards" case above already
             // uses, so the two tiles can never disagree.
-            let skinTempValue = d?.skinTempDevC ?? lastVitalsDay?.skinTempDevC ?? lastSkinTempDay?.skinTempDevC
+            let skinTempValue = skinTempLeadReading
             StatTile(
                 label: "Skin Temp",
-                value: Self.skinTempCardValue(skinTempValue, fahrenheit: temperatureUnit == .fahrenheit),
+                value: Self.skinTempCardValue(reading: skinTempValue, fahrenheit: temperatureUnit == .fahrenheit),
                 caption: skinTempValue == nil ? Self.needsStrapCaption : "",
                 accent: skinTempValue == nil ? StrandPalette.textPrimary : StrandPalette.metricAmber,
                 sparkline: sparks["skin_temp"],
@@ -4964,6 +5014,15 @@ struct TodayView: View {
 
     /// The Skin Temp card's value, extracted so the bimodal-column decision can be unit-tested without a
     /// live view. Nil (no reading anywhere in the carry chain) reads as an em-dash rather than a number.
+    /// The Skin Temp card's value when the surface LEADS WITH THE ABSOLUTE (#1844) — the row supplies both
+    /// numbers and `SkinTempDisplay.leadReading` picks, so a night that measured a real temperature shows
+    /// one and only a night without falls back to the signed deviation. Nil (neither number anywhere in the
+    /// carry chain) reads as an em-dash. The `Double?` sibling below stays for the deviation-only callers.
+    static func skinTempCardValue(reading: SkinTempDisplay.Reading?, fahrenheit: Bool) -> String {
+        guard let reading else { return "—" }
+        return SkinTempDisplay.formatReading(reading, fahrenheit: fahrenheit)
+    }
+
     static func skinTempCardValue(_ value: Double?, fahrenheit: Bool) -> String {
         guard let value else { return "—" }
         return SkinTempDisplay.format(value, fahrenheit: fahrenheit)

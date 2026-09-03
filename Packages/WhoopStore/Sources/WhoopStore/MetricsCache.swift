@@ -152,6 +152,41 @@ public struct DailyMetric: Equatable, Codable {
     public nonisolated static func lastSkinTempDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
         days.last(where: { $0.skinTempDevC != nil && $0.day < todayKey })
     }
+
+    /// The freshest strictly-prior row carrying EITHER skin-temp number (#1844), so a surface can lead
+    /// with the absolute and fall back to the deviation from ONE night rather than mixing two.
+    ///
+    /// The OR here is deliberate and is NOT the #1842 defect. That bug read field X off a row selected on
+    /// (X or Y), so a row holding only Y blanked X. This selects a row for a value that is "whichever of
+    /// the two this night has", and the caller reads both fields off THAT row and lets
+    /// `SkinTempDisplay.leadReading` pick — so the chosen row always supplies the number shown, and an
+    /// absolute is never paired with another night's deviation. `lastSkinTempDay` stays as-is for the
+    /// deviation-only surfaces. Byte-twin of the Android `lastSkinTempReadingRow`.
+    public nonisolated static func lastSkinTempReadingDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        days.last(where: { ($0.skinTempC != nil || $0.skinTempDevC != nil) && $0.day < todayKey })
+    }
+
+    /// PER-FIELD HRV carry — the twin of `lastSpo2Day` for a field `lastVitalsDay` DOES check, which is
+    /// precisely why it needs one. That predicate is an OR across HRV / resting-HR / respiratory, so it
+    /// resolves the freshest row carrying ANY of the three — including a respiratory-only row whose
+    /// `avgHrv` is nil. The HRV card then reads that nil and renders "—" while a tile carrying a different
+    /// row shows a real number on the same screen (#1842). Resolving per field picks the freshest row that
+    /// actually holds an HRV, the same correction `lastSpo2Day` and `lastSkinTempDay` already make.
+    ///
+    /// Deliberately NOT staleness-bounded, unlike `Repository.lastRespDay`: an old HRV/RHR carry is
+    /// disclosed rather than suppressed — the call sites stamp the row's own date and `carriedCaption`
+    /// relabels a weeks-old one to "Latest sleep" (#779). Respiratory took a hard bound instead because a
+    /// single CSV import's value was reading as today's for a fortnight (#1331). Same `$0.day < todayKey`
+    /// future-clock guard; `days` is oldest→newest. Byte-twin of the Android `lastHrvRow`.
+    public nonisolated static func lastHrvDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        days.last(where: { $0.avgHrv != nil && $0.day < todayKey })
+    }
+
+    /// PER-FIELD resting-HR carry — twin of `lastHrvDay`, same OR-predicate cause and same unbounded-by-
+    /// design carry (#1842). Byte-twin of the Android `lastRestingHrRow`.
+    public nonisolated static func lastRestingHrDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        days.last(where: { $0.restingHr != nil && $0.day < todayKey })
+    }
 }
 
 extension WhoopStore {

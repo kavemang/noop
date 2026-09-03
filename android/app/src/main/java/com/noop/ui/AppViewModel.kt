@@ -699,6 +699,103 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var todayVo2maxCache: Double? = null
 
     /**
+     * #1851 sweep state. A CURSOR, not a "done" flag.
+     *
+     * The candidate query is paged, because a plain "oldest N" returns the same nights every pass — and
+     * the oldest nights are exactly the ones most likely to have lost their raw samples. A page that
+     * cannot fill would otherwise latch, and every newer night that CAN fill would never be reached.
+     */
+    private val skinTempBackfillCursorKey = "skinTemp.backfillCursor"
+
+    /**
+     * The outstanding count at which a COMPLETE sweep filled nothing, so later passes can stop paying for
+     * reads that have already been proved fruitless. Keyed on the uncapped count, so a night arriving
+     * later — an import brings in old history — changes it and re-arms the sweep.
+     */
+    private val skinTempBackfillStuckKey = "skinTemp.backfillStuckAt"
+
+    /** Fills accumulated across the CURRENT sweep, so "the whole sweep found nothing" is distinguishable
+     *  from "this page found nothing". */
+    private val skinTempBackfillSweepFillsKey = "skinTemp.backfillSweepFills"
+
+    /**
+     * #1851: re-derive the nightly ABSOLUTE skin temperature for nights that only ever stored a deviation.
+     *
+     * Runs after a successful scoring pass and independently of the #1846 display preference — the data
+     * must be there whichever way the setting is left, so switching between Temperature and vs baseline is
+     * instant rather than kicking off work.
+     *
+     * One PAGE per pass ([SkinTempBackfill.DEFAULT_MAX_NIGHTS]), advancing a cursor, so a deep history
+     * drains over successive passes instead of turning one pass into the #836/#841 battery shape. When a
+     * page comes back short the sweep has seen everything: the cursor resets, and if the whole sweep filled
+     * nothing the outstanding count is recorded so identical counts are skipped thereafter.
+     *
+     * The WHOOP 4.0 anchor is resolved from the CURRENT scan window, the same span the engine learns its
+     * own anchor over — never from the old window being filled. An absolute is offset-sensitive, so nights
+     * written on a re-learned anchor would sit on a different scale from the ones already stored and the
+     * chart would plot two scales as one line. A 4.0 with no resolvable anchor is declined by the runner,
+     * and a decline records no progress, so it retries once an anchor exists.
+     */
+    private suspend fun backfillSkinTempAbsolutes(deviceId: String) {
+        val prefs = NoopPrefs.of(appContext)
+        // Scored rows live in the COMPUTED namespace; raw samples under the strap id. Counting the strap
+        // id here found nothing at all, so the sweep looked finished before it began.
+        val outstanding = repository.countDaysMissingSkinTempAbsolute(
+            com.noop.analytics.SkinTempBackfill.computedIdFor(deviceId),
+        )
+        if (outstanding == 0) return
+        if (prefs.getInt(skinTempBackfillStuckKey, -1) == outstanding) return
+
+        val ownerSource = RegistryDayOwnerSource(noopApp.deviceRegistry)
+        val family = ownerSource.skinTempFamily(deviceId)
+        val tolerance = ownerSource.skinTempWornToleranceSec(deviceId)
+        val now = System.currentTimeMillis() / 1000
+        val anchor = if (family == com.noop.protocol.DeviceFamily.WHOOP4) {
+            // Same span the engine learns its anchor over, NOT the window being filled.
+            val scanFrom = now - 21L * 24 * 3_600
+            val windowSkin = repository.skinTempSamples(
+                deviceId, scanFrom, now, com.noop.analytics.SkinTempBackfill.STREAM_LIMIT,
+            )
+            com.noop.protocol.Whoop4SkinTemp.deviceAnchorRaw(windowSkin.map { it.raw })
+        } else {
+            null
+        }
+        val cursor = prefs.getString(skinTempBackfillCursorKey, "") ?: ""
+        val report = com.noop.analytics.SkinTempBackfill.run(
+            repo = repository,
+            deviceId = deviceId,
+            family = family,
+            currentAnchorRaw = anchor,
+            wornToleranceSec = tolerance,
+            nowSeconds = now,
+            afterDay = cursor,
+        )
+        // A decline records nothing: a 4.0 whose anchor resolves later must still get its backfill.
+        if (!report.declinedNoAnchor) {
+            val sweepFills = prefs.getInt(skinTempBackfillSweepFillsKey, 0) + report.filled
+            val edit = prefs.edit()
+            if (report.sweepComplete) {
+                // Every outstanding night has been visited. Start the next sweep from the top, and only
+                // stop paying for reads when the WHOLE sweep — not just its last page — found nothing.
+                edit.remove(skinTempBackfillCursorKey).remove(skinTempBackfillSweepFillsKey)
+                if (sweepFills == 0) edit.putInt(skinTempBackfillStuckKey, outstanding)
+            } else {
+                edit.putString(skinTempBackfillCursorKey, report.lastDay)
+                    .putInt(skinTempBackfillSweepFillsKey, sweepFills)
+            }
+            if (report.filled > 0) edit.remove(skinTempBackfillStuckKey)
+            edit.apply()
+        }
+        ble.externalLog(
+            "skinTempBackfill: page=${report.candidates} filled=${report.filled} noMean=${report.noMean} " +
+                "noSamples=${report.noSamples} noSessions=${report.noSessions} " +
+                "outstanding=$outstanding sweepComplete=${report.sweepComplete} " +
+                "declined=${report.declinedNoAnchor}",
+            com.noop.testcentre.TestDomain.UNIVERSAL,
+        )
+    }
+
+    /**
      * Recent daily metrics (newest last), backing the Today grid + illness watch.
      * MERGED: imported "my-whoop" rows win per day; on-device computed "my-whoop-noop"
      * rows (from [IntelligenceEngine]) gap-fill, so recovery/strain/sleep populate from
@@ -1197,6 +1294,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             .putLong("score.lastPassAt", System.currentTimeMillis() / 1000).apply()
                     }
                 }
+                    .onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
+                // #1854: OUTSIDE the `analyzeHasNewData` gate on purpose.
+                //
+                // This was inside the scoring pass's onSuccess, which only runs when the fingerprint moved
+                // — so a feature whose entire job is reprocessing OLD nights never ran on the installs that
+                // need it most: a strap that has not synced has no new data, so no pass, so no backfill.
+                // The one install this was built for sat with five temperatures and never attempted the
+                // rest.
+                //
+                // Safe to run on every tick: it costs one COUNT when there is nothing outstanding, and the
+                // fruitless watermark stops it paying for reads once a whole sweep has come back empty.
+                runCatching { backfillSkinTempAbsolutes(deviceId) }
                     .onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
                 // Opt-in writeback: push the freshly computed nights into Health Connect so other
                 // apps see them. Idempotent (clientRecordId per metric+day), so re-running every
@@ -2961,6 +3070,9 @@ enum class DoubleTapAction {
         }
 
     companion object {
+        /** #1851 one-shot guard: the absolutes backfill has completed for this install. */
+        const val skinTempBackfillDoneKey = "skinTemp.backfillDone"
+
         /** Decode a persisted name back to an action; tolerant of an unknown/blank value (→ [NONE]). */
         fun fromRaw(raw: String?): DoubleTapAction =
             entries.firstOrNull { it.name == raw } ?: NONE
