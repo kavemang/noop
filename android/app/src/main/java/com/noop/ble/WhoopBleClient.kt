@@ -26,6 +26,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.noop.NoopApplication
 import com.noop.data.HrRow
+import com.noop.data.InsertCounts
 import com.noop.data.RrRow
 import com.noop.data.EventEntry
 import com.noop.data.StandardHrMapping
@@ -2845,6 +2846,7 @@ class WhoopBleClient(
         deviceId = deviceId,
         cursorStore = cursorStore,
         ackTrim = { trim, endData -> ackHistoricalChunk(trim, endData) },
+        onBankedOffload = { counts -> addBankedOffload(counts) },
         onChunkCommitted = { batch -> onBackfillChunkCommitted(batch) },
         onConsoleChunk = { consoleChunksThisSession += 1 },
         // #77/#91: archive undecodable frames before the ack. append() returns ok=true (written, or
@@ -6197,6 +6199,12 @@ class WhoopBleClient(
                     // #1809: this link's inbound tally starts empty, so the epitaph on disconnect reports
                     // exactly what arrived on THIS link and never a previous session's traffic.
                     inboundFrames = 0; inboundBytes = 0; cmdChannelFrames = 0
+                    // #1635: same guarantee for the banked tally. Clearing only on teardown would be enough if
+                    // every link ended in one; a link that begins without a preceding clean teardown would
+                    // otherwise open holding the previous link's rows and report them as banked on this one.
+                    liveHr.set(0); liveRr.set(0); offloadHr.set(0); offloadRr.set(0)
+                    offloadGravity.set(0); offloadResp.set(0); offloadSkinTemp.set(0)
+                    offloadSpo2.set(0); offloadSteps.set(0); offloadChunks.set(0)
                     realtimeArmedThisLink = false
                     // A connect succeeded → clear the stale-bond re-pair guide UNLESS we are in a known
                     // bond-loop (#617). In that loop the strap "connects" every ~3 s before timing out
@@ -6724,6 +6732,40 @@ class WhoopBleClient(
     private var inboundFrames = 0
     private var inboundBytes = 0
     private var cmdChannelFrames = 0
+
+    // #1635: rows ACCEPTED on this link, split by PATH. The realtime decoder (`extractStreams`) only
+    // ever produces hr/rr/events/battery; gravity, resp, skinTemp, spo2 and steps arrive solely through
+    // the offload's historical decoder. Counting one path and naming streams from the other printed a
+    // constant dressed as a finding, which is what the live-only first cut did.
+    //
+    // ATOMIC because the writers are not one thread: the live pair is folded in from `flushLive` and
+    // `flushStandardHr`, two independent `ioScope.launch` coroutines, the offload pair from the
+    // Backfiller's own coroutine, and the teardown read is a third context again.
+    private val liveHr = java.util.concurrent.atomic.AtomicInteger(0)
+    private val liveRr = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadHr = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadRr = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadGravity = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadResp = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadSkinTemp = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadSpo2 = java.util.concurrent.atomic.AtomicInteger(0)
+    private val offloadSteps = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Chunks the offload actually persisted on this link. Separates "never ran" from "nothing new". */
+    private val offloadChunks = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Fold one LIVE persist round into the per-link tally (hr/rr are all the realtime decoder yields). */
+    private fun addBankedLive(c: InsertCounts) {
+        liveHr.addAndGet(c.hr); liveRr.addAndGet(c.rr)
+    }
+
+    /** Fold one OFFLOAD persist round in. This is where the bond shows: an unbonded strap defers it. */
+    private fun addBankedOffload(c: InsertCounts) {
+        offloadChunks.incrementAndGet()
+        offloadHr.addAndGet(c.hr); offloadRr.addAndGet(c.rr)
+        offloadGravity.addAndGet(c.gravity); offloadResp.addAndGet(c.resp)
+        offloadSkinTemp.addAndGet(c.skinTemp); offloadSpo2.addAndGet(c.spo2)
+        offloadSteps.addAndGet(c.steps)
+    }
     /** #1809: was realtime armed at ANY point on THIS link. Not the same thing as [realtimeArmed], which
      *  is persistent edge state: it can carry true in from a previous link, or read false at the drop
      *  after a mid-link disarm. The epitaph needs the per-link fact, which is what the Apple twin's
@@ -9051,7 +9093,7 @@ class WhoopBleClient(
         }
         if (!batch.isEmpty) {
             try {
-                repository.insert(batch, deviceId)
+                addBankedLive(repository.insert(batch, deviceId))
                 liveInsertFailuresRealtime.set(0)
             } catch (t: Throwable) {
                 // Re-buffer at the front so these frames retry on the next cadence (port of Collector).
@@ -9134,7 +9176,7 @@ class WhoopBleClient(
             }
         }
         try {
-            repository.insert(StreamBatch(hr = hr, rr = rr, events = contact), deviceId)
+            addBankedLive(repository.insert(StreamBatch(hr = hr, rr = rr, events = contact), deviceId))
             liveInsertFailuresStd.set(0)
         } catch (t: Throwable) {
             synchronized(collectorLock) {
@@ -9986,9 +10028,26 @@ class WhoopBleClient(
                 // before handleDisconnect runs and is not reassigned above, so it is valid here.
                 ended = if (intentionalDisconnect) "intentional" else "status=$status",
             ))
+            // #1635: what the DATABASE gained from the LIVE streams, beside what the radio carried. An
+            // unbonded 5/MG keeps the epitaph looking healthy — hundreds of inbound frames — while every
+            // bond-gated stream banks nothing, and that split is invisible in a single export. Live only:
+            // the offload persists through `Backfiller` and has its own accounting, so folding it in here
+            // would be double-counted in one direction and, worse, its ABSENCE reads as a fault.
+            // Guarded by the SAME `linkUpSinceMs` as the epitaph: on a failed connect attempt the counters
+            // hold the previous link's tally, and reporting them would describe a link that never existed.
+            log(ConnectionReadout.linkBankedSummary(
+                liveHr = liveHr.get(), liveRr = liveRr.get(), offloadChunks = offloadChunks.get(),
+                offloadHr = offloadHr.get(), offloadRr = offloadRr.get(),
+                offloadGravity = offloadGravity.get(), offloadResp = offloadResp.get(),
+                offloadSkinTemp = offloadSkinTemp.get(), offloadSpo2 = offloadSpo2.get(),
+                offloadSteps = offloadSteps.get(),
+            ), com.noop.testcentre.TestDomain.CONNECTION)
         }
         // Clear the tally with the link, so a second teardown for the same drop cannot re-report it.
         inboundFrames = 0; inboundBytes = 0; cmdChannelFrames = 0
+        liveHr.set(0); liveRr.set(0); offloadHr.set(0); offloadRr.set(0)
+        offloadGravity.set(0); offloadResp.set(0); offloadSkinTemp.set(0)
+        offloadSpo2.set(0); offloadSteps.set(0); offloadChunks.set(0)
 
         val heldSuffix = heldForLogSuffix()
         linkUpSinceMs = null
