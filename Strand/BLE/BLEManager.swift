@@ -209,11 +209,18 @@ struct BondRefusalGiveUp {
     /// #1635: the hint shown when the hello is switched off and the link is KEPT.
     ///
     /// Nothing is paused on this branch, so it must not say auto-reconnect stopped. It names what was lost
-    /// (history sync) and the one action that restores the attempt, without asserting a cause.
+    /// and what to try, without asserting a cause.
+    ///
+    /// #1635 follow-up: it used to end "Tap Connect to try the handshake again", which framed a strap that
+    /// REFUSES pairing as a retryable failure — inviting exactly the hammering the give-up latch exists to
+    /// stop. A field report read all of this and still asked how to fix it, so the ending now leads with
+    /// the only thing anyone has recovered from this state with (pairing mode, reported once on #1635 and
+    /// hedged accordingly) and keeps Connect as the follow-up. It also no longer claims HRV and resting
+    /// heart rate are unavailable: since #1884 an HR-only night reports both.
     ///
     /// Pure. Byte-identical to the Kotlin `BondRefusalGiveUp.helloSuppressedHint`.
     static func helloSuppressedHint() -> String {
-        "The secure handshake with your strap never completes, and the attempt itself is what drops the link. NOOP has switched it off for this strap so live heart rate keeps streaming. History sync stays unavailable until it pairs, and so do motion, skin temperature, SpO₂ and respiratory rate — so sleep is staged from heart rate alone, and HRV and resting heart rate are unavailable. Tap Connect to try the handshake again."
+        "The secure handshake with your strap never completes, and the attempt itself is what drops the link. NOOP has switched it off for this strap so live heart rate keeps streaming. History sync stays unavailable until it pairs, and so do motion, skin temperature, SpO₂ and respiratory rate, so sleep is staged from heart rate alone. Some straps have paired again after being put in pairing mode. Tap until the LEDs flash blue, then tap Connect."
     }
 
     /// The paused hint for a bond that failed WITHOUT the strap ever answering (#1635).
@@ -994,6 +1001,24 @@ public final class BLEManager: NSObject, ObservableObject {
     /// number rather than an independently chosen one: this read can cost the link, so the two platforms
     /// should not be probing at different moments when a field capture has to explain a drop.
     static let unbondedDisReadDelay: TimeInterval = 3.0
+    /// #1193: the WHOOP 4.0 strap serial from `GET_HELLO_HARVARD`, once it has been seen TWICE.
+    ///
+    /// The withholding rule itself lives in `RepeatedSerialGate`, beside the decoder, where it is unit
+    /// tested; this pair is just the manager's view of its outcome.
+    ///
+    /// The 5/MG adopts its DIS serial on first read, because `0x2A25` is a spec-defined field that means
+    /// one thing. The 4.0 offset is not that: it was read off a single capture, so "the 9-char alnum run
+    /// at offset 14" is a strong inference rather than a documented field. If that run turned out to be
+    /// per-session rather than per-strap, adopting it immediately would mint a NEW id on every connect and
+    /// migrate the history each time — strictly worse than the duplicate row this exists to prevent.
+    ///
+    /// So a value must repeat before it is trusted. Two hellos carrying the same run cannot both be a
+    /// fresh per-session token, which is the only failure mode that would do real damage. The cost is that
+    /// a 4.0 adopts one connect later than a 5/MG; the benefit is that the destructive failure cannot
+    /// happen at all. Deliberately NOT reset on disconnect — the two sightings are meant to span connects.
+    private var harvardSerialGate = RepeatedSerialGate()
+    private var harvardSerialConfirmed: String?
+
     private var disSerial: String?
     private var disHwRev: String?
     /// #1635 follow-up: the DIS identity extras (firmware, manufacturer, model, software revision) as
@@ -1253,6 +1278,11 @@ public final class BLEManager: NSObject, ObservableObject {
     /// rather than on every tick of the family-rotation timer.
     private var lastBlockedConnectReason: String?
 
+    /// #1635: one `ScanAdvertisementSummary` line per SCAN, not per process — the question it answers
+    /// is only visible by comparing a scan before the strap was put in pairing mode against one after,
+    /// so `startScan` reopens it.
+    private var advertisementLogged = false
+
     /// Stable device id; matches the server's existing device for sync parity. Overridable.
     /// Seeded from the init argument, then refined once in bootstrapStore() to the device registry's
     /// active id (still "my-whoop" today) before any store writes use it — see bootstrapStore().
@@ -1301,6 +1331,7 @@ public final class BLEManager: NSObject, ObservableObject {
         #endif
         // Strap-as-clock: an incoming EVENT packet kicks a rate-limited catch-up sync.
         router.onSyncTrigger = { [weak self] in self?.requestSync(.strap) }
+        router.onStrapSerial = { [weak self] serial in self?.noteHarvardSerial(serial) }   // #1193
         // #78 hole-4: a paused-for-bond-loop strap gets one bounded salvage attempt per app-foreground.
         installForegroundSalvageProbe()
     }
@@ -1500,6 +1531,7 @@ public final class BLEManager: NSObject, ObservableObject {
         #endif
         // Strap-as-clock: an incoming EVENT packet kicks a rate-limited catch-up sync.
         router.onSyncTrigger = { [weak self] in self?.requestSync(.strap) }
+        router.onStrapSerial = { [weak self] serial in self?.noteHarvardSerial(serial) }   // #1193
         // #78 hole-4: a paused-for-bond-loop strap gets one bounded salvage attempt per app-foreground.
         installForegroundSalvageProbe()
     }
@@ -4481,6 +4513,11 @@ public final class BLEManager: NSObject, ObservableObject {
         // #battery: ~60 s normally, ~30 s while charging (see `batteryPollDue`).
         if BLEManager.batteryPollDue(tick: keepAliveTick, charging: state.charging == true) {
             send(.getBatteryLevel, payload: [])
+            // The 5/MG battery pack rides the SAME cadence as the strap's own gauge — it is the same
+            // question about the same physical thing, and a second timer would only be a second thing to
+            // get wrong. 5/MG only: a 4.0 never answers 151 (its pack is voltage-only via 98), so asking
+            // would be traffic with no reply.
+            if selectedModel.deviceFamily == .whoop5 { send(.getBatteryPackInfo, payload: []) }
         }
     }
 
@@ -4611,6 +4648,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// from the already-gated `connectFromSystem` — and this method's own family-rotation timer, which
     /// cannot start a scan that one of those did not. Gating here as well would block the user's Connect.
     private func startScan(for model: WhoopModel, allowFallback: Bool) {
+        advertisementLogged = false
         cancelScanFallback()
         selectedModel = model
         reassembler = Reassembler(family: model.deviceFamily)
@@ -4820,14 +4858,33 @@ public final class BLEManager: NSObject, ObservableObject {
         adoptWhoopSerialIdentity()
     }
 
+    /// The serial this pairing may adopt: the 5/MG's DIS read, or a 4.0's twice-seen hello serial.
+    private var adoptableSerial: String? { disSerial ?? harvardSerialConfirmed }
+
+    /// #1193: a 4.0 hello serial arrived. Adopt only on the SECOND sighting of the same value — see
+    /// `harvardSerialCandidate` for why a single sighting is not enough to act on destructively.
+    private func noteHarvardSerial(_ serial: String) {
+        // Do NOT advance the gate before the store exists. The gate confirms EXACTLY ONCE, so a
+        // confirmation raised while `adoptWhoopSerialIdentity` would bail is not deferred, it is lost for
+        // the lifetime of the process — every later sighting returns nil because the value is already
+        // confirmed. The 5/MG path survives the same hazard only because it re-offers its DIS serial on
+        // every connect; a once-only gate has no such second chance, so it must not consume a sighting it
+        // cannot act on. Kotlin twin guards its own missing dependency the same way.
+        guard registryStore != nil else { return }
+        guard let confirmed = harvardSerialGate.offer(serial) else { return }
+        harvardSerialConfirmed = confirmed
+        adoptWhoopSerialIdentity()
+    }
+
     /// #1303: the 5/MG DIS read hands us the strap's OWN serial, so re-point this pairing from its
     /// transient CoreBluetooth-UUID id onto a stable `whoop-<serial>` id — through the SAME generic
     /// migration the ring already uses (`adoptSerialIdentity`, #771), so a re-pair or factory reset stops
     /// forking one physical strap into a second row and orphaning its history (#1193).
     ///
-    /// A WHOOP 4.0 is deliberately untouched: it does not expose a DIS serial (the read above is gated
-    /// `!= .whoop4`) and the 4.0 serial's source on the wire is not yet identified, so there is nothing
-    /// honest to adopt onto here.
+    /// A WHOOP 4.0 reaches this by a different road. It exposes no DIS serial (the read above is gated
+    /// `!= .whoop4`), so its serial comes from the `GET_HELLO_HARVARD` response instead — see
+    /// `Whoop4HelloSerial` for the offset and `noteHarvardSerial` for why a 4.0 waits for a second
+    /// sighting before adopting where a 5/MG adopts on the first read (#1193).
     ///
     /// Deferred to the next main-loop turn, mirroring `adoptOuraSerial`: adoption re-points the ACTIVE
     /// device, and the observers that react tear down and rebuild the very connection this callback is
@@ -4838,7 +4895,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// onto a garbage key, which is worse than not adopting.
     private func adoptWhoopSerialIdentity() {
         guard let rs = registryStore,
-              let serialId = WhoopSerialIdentity.adoptedId(serial: disSerial),
+              let serialId = WhoopSerialIdentity.adoptedId(serial: adoptableSerial),
               let active = try? rs.all().first(where: { $0.status == .active }),
               WhoopSerialIdentity.mayAdopt(currentId: active.id),
               active.id != serialId
@@ -4858,7 +4915,7 @@ public final class BLEManager: NSObject, ObservableObject {
             // `SourceCoordinator.pointWhoop`, which re-points any non-legacy id.
             self.setActiveDeviceId(serialId)
             // Prefix only. `serialId` embeds the full serial, which must never reach a shareable log.
-            self.log("Adopted stable serial identity (serialPrefix=\(WhoopSerialIdentity.logSafe(serial: self.disSerial))) - history re-pointed off the transient pairing id (#1303)")
+            self.log("Adopted stable serial identity (serialPrefix=\(WhoopSerialIdentity.logSafe(serial: self.adoptableSerial))) - history re-pointed off the transient pairing id (#1303)")
             self.onSerialIdentityAdopted?(serialId)
         }
     }
@@ -5337,6 +5394,36 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
                                advertisementData: [String: Any],
                                rssi RSSI: NSNumber) {
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "unknown"
+        // The raw name goes to the DEVICE LIST (the user's own screen, where they need to recognise
+        // their strap); only the log gets the model-only form. See LiveState.logSafeDeviceName.
+        let safeName = LiveState.logSafeDeviceName(name)
+        // #1635: what the strap ADVERTISED, once per scan. The open question there is whether a
+        // refusing strap was in pairing mode, and a strap that accepts pairing should advertise
+        // differently — but nothing recorded the advertisement, so no log could say. Structure only,
+        // never payload: see `ScanAdvertisementSummary`. Test Centre gated. CoreBluetooth exposes no AD
+        // flags byte, so that field reads `none` here and carries on the Kotlin side.
+        if !advertisementLogged, TestCentre.active(.connection) {
+            advertisementLogged = true
+            let svc = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
+                .map { $0.uuidString.lowercased() } ?? []
+            var svcLens: [String: Int] = [:]
+            if let sd = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] {
+                for (k, v) in sd { svcLens[k.uuidString.lowercased()] = v.count }
+            }
+            var mfgLens: [Int: Int] = [:]
+            if let md = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data, md.count >= 2 {
+                mfgLens[Int(md[0]) | (Int(md[1]) << 8)] = md.count - 2
+            }
+            state.append(log: ScanAdvertisementSummary.line(
+                flags: nil,
+                serviceUuids: svc,
+                serviceDataLengths: svcLens,
+                manufacturerDataLengths: mfgLens,
+                txPower: (advertisementData[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue,
+                localNameLength: ScanAdvertisementSummary.localNameLength(
+                    advertisementData[CBAdvertisementDataLocalNameKey] as? String),
+                connectable: (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue ?? true))
+        }
         // #716: the seeded "my-whoop" device has model "WHOOP" (no generation). Once a live scan
         // confirms which service family the strap advertises, stamp the correct model so
         // forRegistryModel returns the right DeviceFamily (fixes skin-temp ADC scale + display).
@@ -5355,10 +5442,10 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         )
         if !scanDecision.shouldConnect {
             if let family = scanDecision.unsupportedFamily {
-                log("Discovered \(name) (rssi \(RSSI)) — \(family.diagnosticUnsupportedMessage)")
+                log("Discovered \(safeName) (rssi \(RSSI)) — \(family.diagnosticUnsupportedMessage)")
                 return
             }
-            log("Discovered \(name) (rssi \(RSSI)) without \(selectedModel.displayName) service — ignoring")
+            log("Discovered \(safeName) (rssi \(RSSI)) without \(selectedModel.displayName) service — ignoring")
             return
         }
         // Multi-WHOOP present-scan (Add-a-WHOOP wizard): collect the strap, do NOT auto-connect, and
@@ -5379,14 +5466,14 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // WHOOP default) this guard is skipped and the original "connect to the first discovered" path
         // below is byte-for-byte unchanged.
         if let preferred = preferredPeripheralUUID, peripheral.identifier != preferred {
-            log("Discovered \(name) (\(peripheral.identifier)) — not the preferred strap; ignoring")
+            log("Discovered \(safeName) (\(peripheral.identifier)) — not the preferred strap; ignoring")
             return
         }
         // No gate here for the same reason as `startScan`: reaching a discovery means a scan is running,
         // and a scan only runs because the user asked or because the gated system entry allowed it.
         cancelScanFallback()
         persistSelectedModel(selectedModel)
-        log("Discovered \(name) (rssi \(RSSI)) — connecting")
+        log("Discovered \(safeName) (rssi \(RSSI)) — connecting")
         central.stopScan()
         preparePeripheral(peripheral)
         central.connect(peripheral, options: nil)
@@ -6053,7 +6140,11 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 helloRetryRequested = false
                 let helloSuppressed = HelloSuppressionStore.suppressed(peripheral.identifier.uuidString)
                 if !shouldSendClientHello(suppressedForDevice: helloSuppressed, userInitiated: helloUserAsked) {
-                    log("WHOOP 5/MG: CLIENT_HELLO suppressed for this strap - it was never acknowledged and the write is what drops the link. Staying on live HR (not fully paired); press Connect to try the handshake again (#1635).")
+                    // #1635: says what happened and what has actually worked, not "try again". This strap
+                    // refuses the handshake, so a retry is the one thing that cannot help - and suggesting
+                    // it invites the hammering this suppression exists to stop. Mirrors the user-facing
+                    // hint, which lost the same ending.
+                    log("WHOOP 5/MG: CLIENT_HELLO suppressed for this strap - it was never acknowledged and the write is what drops the link. Staying on live HR (not fully paired). Some straps have paired again after being put in pairing mode (tap until the LEDs flash blue) (#1635).")
                     state.pairingHint = BondRefusalGiveUp.helloSuppressedHint()
                     // The unbonded DIS attempt rides HERE and nowhere else: this is the only 5/MG state
                     // known to be stable - the handshake is off and the link is holding - and it is now

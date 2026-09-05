@@ -2507,6 +2507,9 @@ class WhoopBleClient(
     /// The strap family the user chose to pair, remembered so an auto-reconnect after a
     /// dropout re-scans for the same model instead of falling back to WHOOP 4.0.
     private var selectedModel = WhoopModel.WHOOP4
+    /** #1635: one [ScanAdvertisementSummary] line per scan session, not one per discovery burst. */
+    private var advertisementLogged = false
+
     /** #716: true once the seeded "WHOOP" model has been stamped to the correct family. */
     private var modelStamped = false
     /// The last device we connected to, kept so an auto-reconnect after a dropout can connect
@@ -3213,6 +3216,43 @@ class WhoopBleClient(
      * when reading a capture where iOS shows the adoption line and Android does not.
      */
     var onSerial: ((String) -> Unit)? = null
+    /**
+     * #1193: the WHOOP 4.0 strap serial from `GET_HELLO_HARVARD`, once it has been seen TWICE.
+     *
+     * The 5/MG adopts its DIS serial on first read, because `0x2A25` is a spec-defined field that means
+     * one thing. The 4.0 offset is not that: it was read off a single capture, so "the 9-char alnum run at
+     * offset 14" is a strong inference rather than a documented field. If that run turned out to be
+     * per-session rather than per-strap, adopting it immediately would mint a NEW id on every connect and
+     * migrate the history each time — strictly worse than the duplicate row this exists to prevent.
+     *
+     * So a value must repeat before it is trusted. Two hellos carrying the same run cannot both be a fresh
+     * per-session token, which is the only failure mode that would do real damage. The cost is that a 4.0
+     * adopts one connect later than a 5/MG; the benefit is that the destructive failure cannot happen at
+     * all. Deliberately NOT cleared on disconnect — the two sightings are meant to span connects.
+     *
+     * The withholding rule itself lives in [com.noop.protocol.RepeatedSerialGate], beside the decoder,
+     * where it is unit tested; the gate holds the confirmed value, so nothing here needs to store it. The
+     * Swift twin DOES keep a field, because its adoption reads a property where this side passes the
+     * value into [onSerial] directly - the shapes differ, the behaviour does not.
+     */
+    private val harvardSerialGate = com.noop.protocol.RepeatedSerialGate()
+
+    /**
+     * A 4.0 hello serial arrived. Adopt only on the SECOND sighting of the same value, then hand it to the
+     * SAME [onSerial] the 5/MG DIS read uses, so both families share one adoption path (#1193).
+     */
+    private fun noteHarvardSerial(serial: String) {
+        // Do NOT advance the gate without a listener. The gate confirms EXACTLY ONCE, so a confirmation
+        // delivered to a null [onSerial] is not deferred, it is lost for the lifetime of the process —
+        // every later sighting returns null because the value is already confirmed. And "no listener" is
+        // an ordinary state here, not a defensive hypothetical: [onSerial] is wired by AppViewModel, which
+        // is UI-scoped, while this client also runs under WhoopConnectionService with no UI alive. The
+        // 5/MG path survives the same hazard only because it re-offers its DIS serial on every connect.
+        val cb = onSerial ?: return
+        val confirmed = harvardSerialGate.offer(serial) ?: return
+        cb.invoke(confirmed)
+    }
+
     private var disSerial: String? = null
     private var disHwRev: String? = null
     /** DIS 0x2A24, the strap's own model number — the authoritative variant signal (#520). */
@@ -3546,6 +3586,10 @@ class WhoopBleClient(
      * Gating here as well would block the user's explicit Connect.
      */
     private fun startScan(model: WhoopModel, allowFallback: Boolean) {
+        // #1635: one advertisement line per SCAN, not per process. The question this answers is whether
+        // a strap advertises differently in pairing mode, which is only visible by comparing a scan
+        // before it was put into pairing mode against one after — so the latch has to reopen here.
+        advertisementLogged = false
         handler.removeCallbacks(scanFallbackRunnable)
         // Defensive: the normal auto-connect scan is NEVER a present-scan. Clearing the flag here means a
         // leaked wizard present-scan (e.g. the wizard was dismissed without stopWhoopScan) can't divert
@@ -5569,6 +5613,33 @@ class WhoopBleClient(
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device: BluetoothDevice = result.device
             val name = result.scanRecord?.deviceName ?: device.name ?: "unknown"
+            // The raw name goes to the DEVICE LIST (the user's own screen, where they need to recognise
+            // their strap); only the log gets the model-only form. See logSafeDeviceName.
+            val safeName = logSafeDeviceName(name)
+            // #1635: what the strap ADVERTISED, once per scan session. The open question on that issue
+            // is whether a refusing strap was in pairing mode, and a strap that accepts pairing should
+            // advertise differently — but nothing recorded the advertisement, so no log could say.
+            // Structure only, never payload: see ScanAdvertisementSummary. Test Centre gated.
+            if (!advertisementLogged && testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
+                advertisementLogged = true
+                val rec = result.scanRecord
+                log(
+                    ScanAdvertisementSummary.line(
+                        flags = rec?.advertiseFlags?.takeIf { it >= 0 },
+                        serviceUuids = rec?.serviceUuids?.map { it.uuid.toString() } ?: emptyList(),
+                        serviceDataLengths = rec?.serviceData?.entries
+                            ?.associate { it.key.uuid.toString() to (it.value?.size ?: 0) } ?: emptyMap(),
+                        manufacturerDataLengths = (0 until (rec?.manufacturerSpecificData?.size() ?: 0))
+                            .associate { i ->
+                                val k = rec!!.manufacturerSpecificData.keyAt(i)
+                                k to (rec.manufacturerSpecificData.valueAt(i)?.size ?: 0)
+                            },
+                        txPower = rec?.txPowerLevel?.takeIf { it != Int.MIN_VALUE },
+                        localNameLength = ScanAdvertisementSummary.localNameLength(rec?.deviceName),
+                        connectable = result.isConnectable,
+                    ),
+                )
+            }
             // #716: the seeded "my-whoop" device has model "WHOOP" (no generation). Once a live
             // scan confirms which service family the strap advertises, stamp the correct model so
             // forRegistryModel returns the right DeviceFamily (fixes skin-temp ADC scale + display).
@@ -5591,11 +5662,11 @@ class WhoopBleClient(
             val scanDecision = whoopGattScanDecision(selectedModel.service.toString(), advertisedServiceUuids)
             if (!scanDecision.shouldConnect) {
                 scanDecision.unsupportedFamily?.let { family ->
-                    log("Discovered $name (rssi ${result.rssi}) — ${family.diagnosticUnsupportedMessage}")
+                    log("Discovered $safeName (rssi ${result.rssi}) — ${family.diagnosticUnsupportedMessage}")
                     _state.update { it.copy(statusNote = family.diagnosticUnsupportedMessage) }
                     return
                 }
-                log("Discovered $name (rssi ${result.rssi}) without ${selectedModel.displayName} service — ignoring")
+                log("Discovered $safeName (rssi ${result.rssi}) without ${selectedModel.displayName} service — ignoring")
                 return
             }
             // Multi-WHOOP present-scan (Add-a-device wizard, MW-4): accumulate the strap, do NOT
@@ -5617,10 +5688,10 @@ class WhoopBleClient(
             // discovered" path below is byte-for-byte unchanged.
             val preferred = preferredAddress
             if (preferred != null && !device.address.equals(preferred, ignoreCase = true)) {
-                log("Discovered $name (${device.address}) — not the preferred strap; ignoring")
+                log("Discovered $safeName (${device.address}) — not the preferred strap; ignoring")
                 return
             }
-            log("Discovered $name (rssi ${result.rssi}) — connecting")
+            log("Discovered $safeName (rssi ${result.rssi}) — connecting")
             // Found it: cancel the not-found timeout AND the family-rotation fallback, then reflect
             // progress in the UI. (PR#195)
             handler.removeCallbacks(scanTimeoutRunnable)
@@ -7386,9 +7457,14 @@ class WhoopBleClient(
                 // falls outside and is withheld inside the probe rather than by this caller.
                 // knownNameOffset = -1 because 16 is the 5/MG device-name offset and means nothing in a
                 // cmd-35 payload. Log-only; decodes/persists nothing. Twin of the Swift FrameRouter probe.
-                if (connectedFamily == DeviceFamily.WHOOP4 && respCmd?.startsWith("GET_HELLO_HARVARD") == true &&
-                    testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
+                if (connectedFamily == DeviceFamily.WHOOP4 && respCmd?.startsWith("GET_HELLO_HARVARD") == true) {
                     val helloPay = whoop4CommandResponsePayload(frame) ?: ByteArray(0)
+                    // #1193: the identity read is UNGATED, unlike the probe below it. Adoption has to work
+                    // for every 4.0 user, and Test Centre is off for almost all of them — gating it would
+                    // ship a stable id only to the people already debugging. The decoder reads a fixed
+                    // 9-byte window and can never reach the device key beside it.
+                    com.noop.protocol.Whoop4HelloSerial.decode(helloPay)?.let { noteHarvardSerial(it) }
+                    if (testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
                     log(
                         com.noop.protocol.HelloIdentityProbe.report(
                             helloPay,
@@ -7396,6 +7472,7 @@ class WhoopBleClient(
                             knownNameOffset = -1,
                         ) + " — locate the strap serial offset (#1303)",
                     )
+                    }
                 }
                 // #1303: the 5/MG half of the same hunt. The 4.0 aid above is 4.0-only — correctly, since
                 // a 5/MG never answers cmd 35 — so this family had no capture at all, and it needs one
@@ -7420,6 +7497,35 @@ class WhoopBleClient(
                             com.noop.protocol.HelloIdentityProbe.report(pay) +
                                 " — locate the strap serial (#1303)",
                         )
+                    }
+                }
+                // The 5/MG battery pack (cmd 151). `BatteryPackInfo` has decoded this reply since its
+                // offsets were captured, and until now nothing sent the command — so the decoder had no
+                // caller and the offsets have never been seen against a live strap.
+                //
+                // LOG-ONLY, deliberately. Those offsets are an unvalidated candidate re-derived from two
+                // frames, and a wrong one does not fail: it renders a confident wrong number. So this
+                // reports what it read AND whether it passes the `displayable` sanity check, which is the
+                // evidence a card needs before it can honestly show anything. Twin of the Swift
+                // FrameRouter branch. Test Centre gated; persists nothing.
+                if (connectedFamily == DeviceFamily.WHOOP5 &&
+                    respCmd?.startsWith("GET_BATTERY_PACK_INFO(") == true &&
+                    testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)
+                ) {
+                    val info = com.noop.protocol.BatteryPackInfo.decode(frame)
+                    if (info != null) {
+                        val soc = info.socPct?.let { String.format("%.1f%%", it) } ?: "—"
+                        // logSafe, NOT the raw serial. The log redaction keys on a literal "WHOOP " prefix
+                        // or a `whoop-` id, and a bare `serial=BB5AP…` matches neither — so the rule that
+                        // protects the strap's serial would have let the pack's through to an exportable
+                        // log. Three characters is enough to tell two packs apart.
+                        val safeSerial = com.noop.data.WhoopSerialIdentity.logSafe(info.serial)
+                        log(
+                            "[pack] present=${info.present} soc=$soc serial=$safeSerial " +
+                                "displayable=${info.displayable} (#1303)",
+                        )
+                    } else {
+                        log("[pack] cmd 151 replied but did not decode — offsets may have moved")
                     }
                 }
                 // Reboot ack (#166): log the COMMAND_RESPONSE result for a user reboot on BOTH families —
@@ -7980,6 +8086,12 @@ class WhoopBleClient(
                     // #battery: ~60 s normally, ~30 s while charging (see [batteryPollDue]).
                     if (batteryPollDue(keepAliveTick, s.charging == true)) send(CommandNumber.GET_BATTERY_LEVEL)
                 } else if (connectedFamily == DeviceFamily.WHOOP5) {
+                    // The battery pack rides the SAME cadence as the strap's own gauge — the same question
+                    // about the same physical thing, and a second timer would only be a second thing to get
+                    // wrong. 5/MG only: a 4.0 never answers 151 (its pack is voltage-only via 98).
+                    if (batteryPollDue(keepAliveTick, s.charging == true)) {
+                        send(CommandNumber.GET_BATTERY_PACK_INFO)
+                    }
                     // #1865: re-arm a LAPSED realtime stream. The WHOOP4 branch above re-sends
                     // TOGGLE_REALTIME_HR every tick precisely because "the firmware lets the realtime HR
                     // stream lapse if it isn't re-armed" — a 5/MG got none of that, on the reasoning that it
@@ -9023,9 +9135,14 @@ class WhoopBleClient(
                     // didBond stays false, so leaving it armed would just move the drop from ~4.8s out to
                     // the 7s window — the same loop, slower. There is no handshake left to time out.
                     cancelBondWatchdog()
+                    // #1635: says what happened and what has actually worked, not "try again". This
+                    // strap refuses the handshake, so a retry is the one thing that cannot help — and
+                    // suggesting it invites the hammering this suppression exists to stop. Mirrors the
+                    // user-facing hint, which lost the same ending.
                     log("WHOOP 5/MG: CLIENT_HELLO suppressed for this strap — it was never acknowledged and" +
-                        " the write is what drops the link. Staying on live HR (not fully paired); press" +
-                        " Connect to try the handshake again (#1635).")
+                        " the write is what drops the link. Staying on live HR (not fully paired). Some straps" +
+                        " have paired again after being put in pairing mode (tap until the LEDs flash blue)" +
+                        " (#1635).")
                     // #221: republish the pairing hint, which the Devices card's "Connected · not paired"
                     // pill reads. It is otherwise written only where a refusal FRESHLY crosses the give-up,
                     // and the latch that records the give-up outlives the process while the hint did not —
@@ -11122,6 +11239,26 @@ private val PII_MAC_RE = Regex("([0-9A-Fa-f]{2}):[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[
 private val PII_WHOOP_SERIAL_RE = Regex("WHOOP (\\d[0-9A-Za-z]{5,})")
 
 /**
+ * The account holder's NAME, as WHOOP writes it into the advertised local name.
+ *
+ * WHOOP names a strap "<FirstName>'s Whoop" by default, and the scan path logs that name on every
+ * discovery, so the shareable strap log (#445) — the file we ask people to attach to public issues —
+ * carried a real person's name on both platforms. No other rule here could see it: they all key on
+ * MAC shape, a "WHOOP " + digit serial, or a "whoop-" id.
+ *
+ * Keeps the possessive and whatever follows it, so "Ryan's WHOOP 4.0" becomes "<name>'s WHOOP 4.0" and
+ * the MODEL survives — that part is diagnostic and identifies nobody. Matches a curly apostrophe too:
+ * Apple platforms write U+2019 into default device names, so a straight-quote-only rule would miss the
+ * iOS half of the logs entirely.
+ *
+ * LIMITATION, deliberate: exactly ONE token before the possessive. "Ryan B's Whoop" keeps "Ryan". A
+ * multi-token rule cannot tell a name apart from the surrounding log text and would eat "Discovered"
+ * along with it, mangling the line. This covers WHOOP's default naming, which is what the logs contain;
+ * a fully custom name with no possessive is not detectable here and stays a known gap.
+ */
+private val PII_DEVICE_NAME_RE = Regex("[\\p{L}\\p{N}_.\\-]+(['\u2019]s\\s+(?i:whoop))")
+
+/**
  * #1303: a device id that has ADOPTED its strap serial (`whoop-<SERIAL>`) is a device identifier in every
  * line that prints an id — the Devices list, each `dayOwner`, the per-source counts. Neither existing rule
  * catches it: [PII_MAC_RE] wants MAC shape, and [PII_WHOOP_SERIAL_RE] wants the literal word "WHOOP "
@@ -11319,6 +11456,54 @@ internal fun redactHexDumpPii(hex: String): String {
     return out
 }
 
+/**
+ * Tokens that identify a MODEL rather than a person, for [logSafeDeviceName].
+ *
+ * Two shapes only, both EXACT: a known vendor, product or model word, and a version number ("4.0").
+ *
+ * There is deliberately no letters-plus-digits pattern for model codes. One was tried and it defeated
+ * the whole design: "[a-z]{1,4}\\d{1,3}" matches "Ryan1" and "Sam99" as readily as "H10", so a first
+ * name with a digit passed through untouched. A pattern cannot be an allowlist - the moment a rule
+ * describes a SHAPE rather than a known value, it admits everything else of that shape. Model codes are
+ * therefore listed one by one.
+ *
+ * The cost is that an unlisted device logs as "<name>" until its code is added here, which is the right
+ * direction to fail: a missing model is an inconvenience, a leaked name is not.
+ *
+ * Anything not on this list is DROPPED, which is the point: a naming shape nobody anticipated loses by
+ * default. Extend it when a device logs as "<name>" and its model is worth having. Swift twin:
+ * `LiveState.safeDeviceNameToken`.
+ */
+private val SAFE_DEVICE_NAME_TOKEN_RE =
+    Regex("(?i)(whoop|mg|polar|verity|sense|wahoo|tickr|garmin|hrm|forerunner|fenix|vantage|ignite|amazfit|huami|zepp|xiaomi|mi|band|coospo|magene|suunto|scosche|rhythm|kickr|tacx|elite|cateye|decathlon|kalenji|geonaute|h6|h7|h9|h10|h64|h808s|oh1|dual|\\d+(\\.\\d+)?)")
+
+/**
+ * A device name reduced to what is safe to put in a shared log: the MODEL, never the person.
+ *
+ * WHOOP seeds a strap's name from the account holder ("<FirstName>'s Whoop") and people rename straps
+ * to anything at all. [redactStrapLogPii] can only GUESS which words in a line are a name; here the
+ * whole string IS the advertised name, so the safe move is an ALLOWLIST - keep the tokens known to name
+ * a model and drop everything else. A naming shape nobody anticipated is then dropped by default rather
+ * than needing a rule to catch it: "Ryan B's WHOOP 4.0" keeps only "WHOOP 4.0", and "Dad's spare" keeps
+ * nothing.
+ *
+ * The "no name advertised" sentinel survives, because "we saw no name" and "we removed a name" are
+ * different facts to whoever reads the log. Swift twin: `LiveState.logSafeDeviceName`.
+ */
+internal fun logSafeDeviceName(name: String?): String {
+    val n = name?.trim().orEmpty()
+    if (n.isEmpty() || n == "unknown") return "unknown"
+    val tokens = n.split(Regex("\\s+"))
+    val safe = tokens.filter { SAFE_DEVICE_NAME_TOKEN_RE.matches(it) }
+    // Say "<name>" only when something was actually removed. An unrenamed "WHOOP 4.0" or "Polar H10"
+    // carries nothing personal, and prefixing it would claim a redaction that never happened.
+    return when {
+        safe.size == tokens.size -> n
+        safe.isEmpty() -> "<name>"
+        else -> "<name> " + safe.joinToString(" ")
+    }
+}
+
 /** Mask MAC addresses and WHOOP serials in a strap-log line before it's shown/exported.
  *  TOTAL — never throws: a redaction failure returns a safe placeholder rather than leaking the raw
  *  line or crashing the caller (#453). The MAC regex captures exactly two groups (first + last octet),
@@ -11331,6 +11516,9 @@ internal fun redactStrapLogPii(s: String): String = try {
         // for an adopted id. The -noop form runs before the general one so the sibling suffix survives.
         .replace(PII_ADOPTED_ID_NOOP_RE, "whoop-$1…$2")
         .replace(PII_ADOPTED_ID_RE, "whoop-$1…")
+        // Last: the name rule keys on literal text no earlier rule produces or consumes, so it neither
+        // masks a substitution marker nor depends on one.
+        .replace(PII_DEVICE_NAME_RE, "<name>$1")
 } catch (t: Throwable) {
     "[redaction error - line withheld]"
 }
