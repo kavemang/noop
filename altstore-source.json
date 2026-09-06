@@ -19,11 +19,11 @@
       "versions": [
         {
           "version": "11.1.1",
-          "buildVersion": "321",
-          "date": "2026-09-05",
+          "buildVersion": "326",
+          "date": "2026-09-06",
           "localizedDescription": "NOOP 11.1.1. See the release notes for what changed.",
           "downloadURL": "https://github.com/kavemang/noop/releases/download/v11.1.1/NOOP-ios-unsigned-v11.1.1.ipa",
-          "size": 29681082,
+          "size": 29703243,
           "minOSVersion": "17.0"
         },
         {
@@ -1451,11 +1451,11 @@
         }
       },
       "version": "11.1.1",
-      "buildVersion": "321",
-      "versionDate": "2026-09-05",
+      "buildVersion": "326",
+      "versionDate": "2026-09-06",
       "versionDescription": "NOOP 11.1.1. See the release notes for what changed.",
       "downloadURL": "https://github.com/kavemang/noop/releases/download/v11.1.1/NOOP-ios-unsigned-v11.1.1.ipa",
-      "size": 29681082,
+      "size": 29703243,
       "minOSVersion": "17.0"
     }
   ],
