@@ -2903,11 +2903,11 @@ struct TodayView: View {
                 #endif
                 metricRow(icon: "waveform.path.ecg", label: "HRV",
                           value: demoHrv ?? (hrv.map { "\(Int($0.rounded()))" } ?? "—"), unit: "ms",
-                          tint: StrandPalette.metricCyan)
+                          tint: StrandPalette.metricCyan, route: .metric("hrv"))
                 Divider().overlay(StrandPalette.hairline)
                 metricRow(icon: "heart.fill", label: "Resting HR",
                           value: demoRhr ?? (rhr.map { "\($0)" } ?? "—"), unit: "bpm",
-                          tint: StrandPalette.metricRose)
+                          tint: StrandPalette.metricRose, route: .metric("rhr"))
                 Divider().overlay(StrandPalette.hairline)
                 metricRow(icon: "lungs.fill", label: "Respiratory",
                           // Today's own respiratory, else the carried night's; a non-carrying today keeps the
@@ -2915,7 +2915,7 @@ struct TodayView: View {
                           value: resp.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) }
                               ?? (vd == nil ? latestString("resp_rate", decimals: 1) : "—"),
                           unit: "rpm",
-                          tint: StrandPalette.accent)
+                          tint: StrandPalette.accent, route: .metric("resp_rate"))
                 // ONE provenance footnote when a shown vital is a carried prior-day read (not today's),
                 // stamped with THAT row's date via the shared caption (which relabels a weeks-old carry to
                 // "Latest sleep", #779), so a prior read is never silently passed off as today.
@@ -2941,7 +2941,26 @@ struct TodayView: View {
     /// One README "metric row": a metric-hue line icon, a secondary label, and a right-aligned bold
     /// value with a small unit. Rows are divided by a hairline. Shared by the Today vitals card.
     @ViewBuilder
-    private func metricRow(icon: String, label: LocalizedStringKey, value: String, unit: String, tint: Color) -> some View {
+    /// A vitals row, optionally pushing its own metric trend (#706/#684).
+    ///
+    /// `route: nil` renders exactly what shipped before - no link, no chevron - so the three other callers
+    /// are untouched and a row that goes nowhere never claims otherwise. `LiquidPressStyle` is not
+    /// decoration: a bare `NavigationLink` applies the default link chrome and would tint the whole row,
+    /// which is why `cardLink` carries it too.
+    private func metricRow(icon: String, label: LocalizedStringKey, value: String, unit: String,
+                           tint: Color, route: TabRoute? = nil) -> some View {
+        Group {
+            if let route {
+                NavigationLink(value: route) { metricRowBody(icon, label, value, unit, tint, linked: true) }
+                    .buttonStyle(LiquidPressStyle())
+            } else {
+                metricRowBody(icon, label, value, unit, tint, linked: false)
+            }
+        }
+    }
+
+    private func metricRowBody(_ icon: String, _ label: LocalizedStringKey, _ value: String,
+                               _ unit: String, _ tint: Color, linked: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .semibold))
@@ -2964,6 +2983,12 @@ struct TodayView: View {
                 Text(unit)
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textTertiary)
+            }
+            // Only when the row goes somewhere: a row that cannot navigate must not imply it can.
+            if linked {
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.vertical, 13)
@@ -4752,7 +4777,14 @@ struct TodayView: View {
             let cycleOnset = dayCycleSeries.last(where: { $0.day <= selectedDayKey })
                 .map { Int($0.value.rounded()) }
             let effortStart = mode == .sleepOnset ? (cycleOnset ?? windowStart) : windowStart
-            let todayHr = await repo.hrSamples(from: effortStart, to: windowEndInclusive)
+            // An EXPLICIT limit, not the 8000 default: that default is chart-sized, and this read is
+            // whole-window. `hrSamples` is `ORDER BY ts ASC LIMIT`, so truncation drops the NEWEST rows —
+            // at the ~18k HR rows a real day banks, the default covered roughly the first ten hours and the
+            // live score silently stopped climbing after that. It failed safe (`effectiveEffort` takes the
+            // max, so the stored row simply won) which is why it went unnoticed. 200_000 is what every
+            // other whole-window HR consumer already passes.
+            let todayHr = await repo.hrSamples(from: effortStart, to: windowEndInclusive,
+                                               limit: 200_000)
             let maxHR = profile.age > 0 ? StrainScorer.tanakaHRmax(age: Double(profile.age)) : nil
             let restHR = displayDay?.restingHr.map(Double.init) ?? StrainScorer.defaultRestingHR
             liveStrainLocal = StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,

@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Brightness6
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Download
@@ -86,6 +87,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -140,6 +142,7 @@ import com.noop.update.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import com.noop.analytics.ClockFormatPreference
 
@@ -1375,32 +1378,6 @@ fun SettingsScreen(
                 )
             }
             SettingsRowDivider()
-            // #1836: which bottom-bar layout to draw. Default OFF — the shipped reserved slot. The
-            // overlay lets a screen's own backdrop show through the bar's glass, which is what it was
-            // built for, but it is app-shell layout no test can judge, so it ships switchable.
-            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_bottom_bar_overlay_f257c96f)) {
-                Switch(
-                    checked = BottomBarStyleStore.overlay,
-                    onCheckedChange = { BottomBarStyleStore.set(context, it) },
-                )
-            }
-            SettingsRowDivider()
-            // #1839: hide the bar while scrolling down, bring it back on scrolling up. Only does anything
-            // with the overlay on, because in the slot layout the space is reserved and hiding the bar
-            // would leave an empty band — so the row is disabled rather than silently inert.
-            // Reduce Motion pins the bar visible (a bar that vanishes without animation reads as a
-            // glitch), so with it on the toggle would flip and change nothing. A switch that silently
-            // does nothing is worse than one that is plainly unavailable, so it greys out for the same
-            // reason it does without the overlay.
-            val autoHideAvailable = BottomBarStyleStore.overlay && !rememberReduceMotion()
-            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_hide_bar_when_scrolling_b077d9f3)) {
-                Switch(
-                    checked = BottomBarStyleStore.autoHide,
-                    enabled = autoHideAvailable,
-                    onCheckedChange = { BottomBarStyleStore.setAutoHide(context, it) },
-                )
-            }
-            SettingsRowDivider()
             // #1821: Clock format. Sits with Language because it is an app-owned display CONVENTION, and
             // like Language it offers "System default" - which here means the device's own 12/24h switch,
             // not the region default that was silently deciding this for everyone. Twin of the Apple row.
@@ -1732,6 +1709,111 @@ fun SettingsScreen(
             }
         }
 
+        // The bar's own card. These four options are all about one piece of app-shell chrome, and living
+        // among the theme controls in Appearance meant two of them sat between unrelated rows while the
+        // other two had nowhere to go. Grouped, the size and transparency read as what they are: choices
+        // about the same bar the toggles above them move and hide.
+        SettingsCard(
+            icon = Icons.Filled.ViewAgenda,
+            title = uiString(R.string.l10n_settings_screen_bottom_bar_f84098a9),
+            blurb = uiString(R.string.l10n_settings_screen_how_the_navigation_bar_looks_f186b099),
+        ) {
+            // #1836: which bottom-bar layout to draw. Default OFF — the shipped reserved slot. The
+            // overlay lets a screen's own backdrop show through the bar's glass, which is what it was
+            // built for, but it is app-shell layout no test can judge, so it ships switchable.
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_bottom_bar_overlay_f257c96f)) {
+                Switch(
+                    checked = BottomBarStyleStore.overlay,
+                    onCheckedChange = { BottomBarStyleStore.set(context, it) },
+                )
+            }
+            SettingsRowDivider()
+            // #1839: hide the bar while scrolling down, bring it back on scrolling up. Only does anything
+            // with the overlay on, because in the slot layout the space is reserved and hiding the bar
+            // would leave an empty band — so the row is disabled rather than silently inert.
+            // Reduce Motion pins the bar visible (a bar that vanishes without animation reads as a
+            // glitch), so with it on the toggle would flip and change nothing. A switch that silently
+            // does nothing is worse than one that is plainly unavailable, so it greys out for the same
+            // reason it does without the overlay.
+            val autoHideAvailable = BottomBarStyleStore.overlay && !rememberReduceMotion()
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_hide_bar_when_scrolling_b077d9f3)) {
+                Switch(
+                    checked = BottomBarStyleStore.autoHide,
+                    enabled = autoHideAvailable,
+                    onCheckedChange = { BottomBarStyleStore.setAutoHide(context, it) },
+                )
+            }
+            // Reaching either control below means scrolling DOWN, which auto-hide reads as "hide the
+            // bar" - so a change made here landed on a bar the user could not see, and neither a slider
+            // drag nor a menu pick is a scroll, so nothing brought it back.
+            //
+            // Keyed on what the bar LOOKS like rather than on either control, so one rule covers both: a
+            // drag restarts this every frame and stays pinned throughout, a menu pick fires it once, and
+            // either way the bar is held a moment longer so the result is visible after the finger lifts.
+            LaunchedEffect(BottomBarStyleStore.scale, BottomBarStyleStore.opacityStep) {
+                BottomBarStyleStore.pinPreview(true)
+                delay(1_500)
+                BottomBarStyleStore.pinPreview(false)
+            }
+            SettingsRowDivider()
+            // Size. A dropdown of fixed multipliers rather than a slider: these are the sizes worth
+            // having, and a continuous control here mostly produces sizes a user cannot tell apart.
+            var sizeMenuOpen by remember { mutableStateOf(false) }
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_bar_size_2304bfbb)) {
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { sizeMenuOpen = true }
+                            .background(Palette.surfaceInset)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(scaleLabel(BottomBarStyleStore.scale), style = NoopType.subhead,
+                             color = Palette.textPrimary)
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = null,
+                             tint = Palette.textSecondary)
+                    }
+                    DropdownMenu(expanded = sizeMenuOpen, onDismissRequest = { sizeMenuOpen = false }) {
+                        BOTTOM_BAR_SCALES.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(scaleLabel(option), color = Palette.textPrimary) },
+                                onClick = {
+                                    sizeMenuOpen = false
+                                    BottomBarStyleStore.setScale(context, option)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            SettingsRowDivider()
+            // Transparency, in the eight steps the store defines. The slider writes on every change so the
+            // bar updates live underneath the sheet - the whole point is seeing it against your own screen.
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(uiString(R.string.l10n_settings_screen_bar_transparency_3f648fbb), style = NoopType.subhead, color = Palette.textPrimary)
+                Text(uiString(R.string.l10n_settings_screen_how_see_through_the_bar_is_ddb0c208), style = NoopType.footnote, color = Palette.textTertiary)
+                Slider(
+                    value = BottomBarStyleStore.opacityStep.toFloat(),
+                    // Live while dragging, persisted once on release: a drag emits a value per frame, and
+                    // writing each one records a decision the user makes once. Rounded, not truncated -
+                    // the snapped value can arrive as 5.9999998, which truncation would read as step 5.
+                    onValueChange = { BottomBarStyleStore.previewOpacityStep(it.roundToInt()) },
+                    onValueChangeFinished = {
+                        BottomBarStyleStore.setOpacityStep(context, BottomBarStyleStore.opacityStep)
+                    },
+                    valueRange = MIN_OPACITY_STEP.toFloat()..MAX_OPACITY_STEP.toFloat(),
+                    // Compose counts the stops BETWEEN the ends, so N notches is N-2. Derived, not
+                    // written out, so changing the notch count cannot leave this line disagreeing with it.
+                    steps = MAX_OPACITY_STEP - MIN_OPACITY_STEP - 1,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Palette.accent,
+                        activeTrackColor = Palette.accent,
+                    ),
+                )
+            }
+        }
         // --- Background image (#custom-background) ---
         // An optional custom photo drawn full-bleed behind EVERY tab (including More), in place of the
         // day-cycle sky (precedence: image > sky > flat canvas). Pick from Photos or Browse the files; the
