@@ -1055,7 +1055,7 @@
     <string name="l10n_today_screen_arrange_today_6b699147">Arrange Today</string>
     <string name="l10n_today_screen_calibrating_37c2c9bd">Calibrating</string>
     <string name="l10n_today_screen_no_new_nights_from_your_strap_for_stale_days_8863bcfe">No new nights from your strap for %1$d days. Check it\'s connected and saving data.</string>
-    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s of %2$s</string>
+    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s of %2$s nights</string>
     <string name="l10n_today_screen_choose_which_cards_show_on_today_f79942e1">Choose which cards show on Today and reorder them with the arrows. </string>
     <string name="l10n_today_screen_close_bbfa773e">Close</string>
     <string name="l10n_today_screen_customise_your_cards_2428d761">Customise your cards</string>
@@ -1973,6 +1973,12 @@
     <string name="smart_alarm_body">Your smart alarm just went off.</string>
     <string name="battery_channel_name">Battery alerts</string>
     <string name="battery_channel_desc">Alerts when the strap battery is low or fully charged.</string>
+    <!-- K5: scheduled Coach morning-brief notification. -->
+    <string name="coach_brief_channel_name">Coach morning brief</string>
+    <string name="coach_brief_channel_desc">Today\'s coaching brief, generated on-device at your chosen time.</string>
+    <string name="coach_brief_title">Today\'s coaching brief</string>
+    <string name="coach_brief_unavailable_title">Coach brief unavailable</string>
+    <string name="coach_brief_unavailable_body">Couldn\'t generate today\'s brief. Open Coach to try again.</string>
     <string name="l10n_app_changelog_battery_saver_quiets_the_gauges_translated_bdbe8650">Battery saver quiets the gauges, translated Android notifications, and instant chart loads</string>
     <string name="l10n_health_screen_no_spo_import_or_health_value_408f8c55">No SpO₂ import or Health value</string>
     <string name="l10n_health_screen_raw_counts_only_needs_an_import_d0e33552">Raw counts only — needs an import</string>
@@ -2445,7 +2451,9 @@
     <string name="today_steps_headline_calibrated">Estimated from %1$d days your phone also counted</string>
     <string name="today_steps_headline_connect_phone">Connect your phone’s step count to estimate steps</string>
     <string name="today_steps_headline_more_days">Need %1$d more days where your phone also counted steps</string>
+    <string name="today_steps_headline_no_motion">No motion synced yet</string>
     <string name="today_synthesis_learning_baseline">Learning your baseline, %1$d of %2$d nights.</string>
+    <string name="today_synthesis_nights_without_hrv">%1$d of the last %2$d nights recorded no HRV. Check the strap is worn overnight and syncing.</string>
     <string name="today_last_night_date">Last night · %1$s</string>
     <string name="today_hr_min">Min</string>
     <string name="today_hr_avg">Avg</string>
@@ -2709,4 +2717,47 @@
     <string name="l10n_settings_screen_bar_size_2304bfbb">Bar size</string>
     <string name="l10n_settings_screen_bar_transparency_3f648fbb">Bar transparency</string>
     <string name="l10n_settings_screen_how_see_through_the_bar_is_ddb0c208">How see-through the bar is. The faintest step still shows its rim, so it can always be found.</string>
+
+    <!-- Coach screen: clear-conversation dialog, morning-brief settings, message actions, and
+         voice input. Externalized from CoachScreen.kt / CoachViewModel.kt hardcoded literals. -->
+    <string name="coach_clear_conversation_confirm">Clear conversation?</string>
+    <string name="coach_clear_conversation_message">This deletes the saved conversation from this device. Coach history is your own notes, not medical advice.</string>
+    <string name="coach_clear_action">Clear</string>
+    <string name="coach_token_estimate">~%1$d tokens</string>
+    <string name="coach_token_warning"> · may exceed small context windows</string>
+    <string name="coach_morning_brief">Morning brief</string>
+    <string name="coach_morning_brief_desc">A local notification with today\'s readiness + training plan, generated on-device each morning.</string>
+    <string name="coach_morning_brief_off">Off: nothing is generated or sent on a schedule.</string>
+    <string name="coach_morning_brief_time">Time</string>
+    <string name="coach_morning_brief_best_effort">Best-effort: Android decides exactly when a backgrounded app wakes to generate it.</string>
+    <string name="coach_copy_action">Copy</string>
+    <string name="coach_share_action">Share</string>
+    <string name="coach_save_to_journal">Save to Journal</string>
+    <string name="coach_listening">Listening…</string>
+    <string name="coach_generating">Generating…</string>
+    <string name="coach_generate_now">Generate now</string>
+    <string name="coach_status_suffix">: %1$s</string>
+    <string name="coach_no_reply">(no reply)</string>
+    <string name="coach_stream_interrupted">%1$s\n\n*(stream interrupted)*</string>
+    <string name="coach_today_brief_format">Today\'s brief\n\n%1$s</string>
+    <string name="coach_brief_widget_title">✦ Coach Brief</string>
+    <string name="coach_brief_widget_empty">No brief yet</string>
+    <string name="coach_brief_widget_enable">Enable Morning Brief in Coach settings to see today\'s readiness here.</string>
+
+    <!-- K4: voice input error messages (CoachVoiceInput.mapError). -->
+    <string name="coach_voice_error_no_speech">No speech was heard.</string>
+    <string name="coach_voice_error_audio">Audio recording failed.</string>
+    <string name="coach_voice_error_busy">Speech recognizer is busy. Try again.</string>
+    <string name="coach_voice_error_permission">Microphone permission denied.</string>
+    <string name="coach_voice_error_generic">Voice input failed. Try again.</string>
+    <string name="coach_voice_error_server">On-device speech is unavailable for this locale.</string>
+    <string name="coach_voice_error_unavailable">On-device speech recognition is not available on this device or locale.</string>
+    <string name="coach_voice_unavailable">On-device speech recognition is not available on this device or locale.</string>
+    <string name="coach_voice_permission_denied">Microphone permission denied. Enable it in Settings to use voice input.</string>
+    <string name="units_settings_blurb">Choose body measurements and exercise distance separately. Your data is always stored the same way; these settings only change its display.</string>
+    <string name="units_body_measurements">Body measurements</string>
+    <string name="units_exercise_distance_pace">Exercise distance &amp; pace</string>
+    <string name="units_kilometres">Kilometres</string>
+    <string name="units_miles">Miles</string>
+    <string name="units_follow_body">Follow body</string>
 </resources>

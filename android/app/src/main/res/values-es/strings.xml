@@ -770,7 +770,7 @@
     <string name="l10n_today_screen_arrange_today_6b699147">Arregla hoy</string>
     <string name="l10n_today_screen_calibrating_37c2c9bd">Calibrando</string>
     <string name="l10n_today_screen_no_new_nights_from_your_strap_for_stale_days_8863bcfe">Sin nuevas noches de tu strap desde hace %1$d días. Comprueba que esté conectado y guardando datos.</string>
-    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s de %2$s</string>
+    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s de %2$s noches</string>
     <string name="l10n_today_screen_choose_which_cards_show_on_today_f79942e1">Elija qué tarjetas muestran en Hoy y reordenarlos con las flechas.</string>
     <string name="l10n_today_screen_close_bbfa773e">Cerrar</string>
     <string name="l10n_today_screen_customise_your_cards_2428d761">Personaliza tus tarjetas</string>
@@ -1843,6 +1843,12 @@
     <string name="smart_alarm_body">Tu alarma inteligente acaba de sonar.</string>
     <string name="battery_channel_name">Alertas de batería</string>
     <string name="battery_channel_desc">Avisos cuando la batería de la pulsera está baja o completamente cargada.</string>
+    <!-- K5: scheduled Coach morning-brief notification. -->
+    <string name="coach_brief_channel_name">Resumen matutino del Coach</string>
+    <string name="coach_brief_channel_desc">Resumen de coaching de hoy, generado en el dispositivo a la hora elegida.</string>
+    <string name="coach_brief_title">Resumen de coaching de hoy</string>
+    <string name="coach_brief_unavailable_title">Resumen del Coach no disponible</string>
+    <string name="coach_brief_unavailable_body">No se pudo generar el resumen de hoy. Abre Coach para intentar de nuevo.</string>
     <string name="l10n_app_changelog_battery_saver_quiets_the_gauges_translated_bdbe8650">El ahorro de batería calma los indicadores, notificaciones de Android traducidas y gráficos instantáneos</string>
     <string name="l10n_health_screen_no_spo_import_or_health_value_408f8c55">Sin importación de SpO₂ ni valor de Health</string>
     <string name="l10n_health_screen_raw_counts_only_needs_an_import_d0e33552">Solo valores brutos — requiere importación</string>
@@ -2333,7 +2339,9 @@
     <string name="today_steps_headline_calibrated">Estimado con %1$d días contabilizados también por el teléfono</string>
     <string name="today_steps_headline_connect_phone">Conecta el recuento de pasos del teléfono para estimar pasos</string>
     <string name="today_steps_headline_more_days">Faltan %1$d días contabilizados también por el teléfono</string>
+    <string name="today_steps_headline_no_motion">Aún no se han sincronizado datos de movimiento</string>
     <string name="today_synthesis_learning_baseline">Creando tu referencia, %1$d de %2$d noches.</string>
+    <string name="today_synthesis_nights_without_hrv">%1$d de las últimas %2$d noches no registraron HRV. Comprueba que llevas la banda por la noche y que se sincroniza.</string>
     <string name="today_last_night_date">Anoche · %1$s</string>
     <string name="today_hr_min">Mín.</string>
     <string name="today_hr_avg">Media</string>
@@ -2683,4 +2691,44 @@
     <string name="l10n_settings_screen_bar_size_2304bfbb">Tamaño de la barra</string>
     <string name="l10n_settings_screen_bar_transparency_3f648fbb">Transparencia de la barra</string>
     <string name="l10n_settings_screen_how_see_through_the_bar_is_ddb0c208">Cuánto se transparenta la barra. El nivel más tenue sigue mostrando su borde, así que siempre se puede encontrar.</string>
+
+    <!-- Coach screen -->
+    <string name="coach_clear_conversation_confirm">¿Borrar conversación?</string>
+    <string name="coach_clear_conversation_message">Esto borra la conversación guardada de este dispositivo. El historial del Coach son tus propias notas, no consejo médico.</string>
+    <string name="coach_clear_action">Borrar</string>
+    <string name="coach_token_estimate">~%1$d tokens</string>
+    <string name="coach_token_warning"> · puede superar ventanas de contexto pequeñas</string>
+    <string name="coach_morning_brief">Resumen matutino</string>
+    <string name="coach_morning_brief_desc">Una notificación local con la preparación + plan de entrenamiento de hoy, generada en el dispositivo cada mañana.</string>
+    <string name="coach_morning_brief_off">Desactivado: no se genera ni se envía nada según un horario.</string>
+    <string name="coach_morning_brief_time">Hora</string>
+    <string name="coach_morning_brief_best_effort">Mejor esfuerzo: Android decide exactamente cuándo una app en segundo plano se despierta para generarlo.</string>
+    <string name="coach_copy_action">Copiar</string>
+    <string name="coach_share_action">Compartir</string>
+    <string name="coach_save_to_journal">Guardar en el diario</string>
+    <string name="coach_listening">Escuchando…</string>
+    <string name="coach_generating">Generando…</string>
+    <string name="coach_generate_now">Generar ahora</string>
+    <string name="coach_status_suffix">: %1$s</string>
+    <string name="coach_no_reply">(sin respuesta)</string>
+    <string name="coach_stream_interrupted">%1$s\n\n*(transmisión interrumpida)*</string>
+    <string name="coach_today_brief_format">Resumen de hoy\n\n%1$s</string>
+    <string name="coach_brief_widget_title">✦ Resumen del Coach</string>
+    <string name="coach_brief_widget_empty">Aún no hay resumen</string>
+    <string name="coach_brief_widget_enable">Activa el Resumen matutino en los ajustes del Coach para ver la preparación de hoy aquí.</string>
+    <string name="coach_voice_error_no_speech">No se detectó voz.</string>
+    <string name="coach_voice_error_audio">Error de grabación de audio.</string>
+    <string name="coach_voice_error_busy">El reconocedor de voz está ocupado. Inténtelo de nuevo.</string>
+    <string name="coach_voice_error_permission">Permiso de micrófono denegado.</string>
+    <string name="coach_voice_error_generic">Error de entrada de voz. Inténtelo de nuevo.</string>
+    <string name="coach_voice_error_server">El reconocimiento de voz en el dispositivo no está disponible para este idioma.</string>
+    <string name="coach_voice_error_unavailable">El reconocimiento de voz en el dispositivo no está disponible en este dispositivo o idioma.</string>
+    <string name="coach_voice_unavailable">El reconocimiento de voz en el dispositivo no está disponible en este dispositivo o idioma.</string>
+    <string name="coach_voice_permission_denied">Permiso de micrófono denegado. Actívalo en Configuración para usar la entrada de voz.</string>
+    <string name="units_settings_blurb">Elige por separado las unidades de las medidas corporales y de la distancia de ejercicio. Los datos siempre se almacenan igual; estos ajustes solo cambian su visualización.</string>
+    <string name="units_body_measurements">Medidas corporales</string>
+    <string name="units_exercise_distance_pace">Distancia y ritmo del ejercicio</string>
+    <string name="units_kilometres">Kilómetros</string>
+    <string name="units_miles">Millas</string>
+    <string name="units_follow_body">Según medidas corporales</string>
 </resources>
