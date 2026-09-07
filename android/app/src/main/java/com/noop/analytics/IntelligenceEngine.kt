@@ -1140,9 +1140,13 @@ object IntelligenceEngine {
                 // 1.25x its wall-clock reads ~197 ms across a sleeping night, against a 40-100 ms
                 // physiological range. Printing that number beside the verdict that says it cannot be
                 // trusted invites it to be read as a measurement, so it is withheld instead; the
-                // `rrIntegrity=` field on the same line says why. RMSSD/meanNN are NOT withheld — mean rate
-                // survives an over-count, and RMSSD's dominant error was the emission order fixed at the
-                // write path (#1072). Twin of the Swift line.
+                // `rrIntegrity=` field on the same line says why. meanNN is NOT withheld: mean rate
+                // survives an over-count. RMSSD is not withheld FROM THIS LINE either, but it no longer
+                // reaches the card, the daily row or the baseline on an over-counted night — the gate that
+                // stops it lives in `SleepStager.sessionAvgHRV` (#1118). Printing the computed value here
+                // while the app refused to use it is a known wart: matching SDNN's `withheld` treatment
+                // needs room this method does not have, since its JaCoCo budget is already at the ratchet.
+                // Twin of the Swift line.
                 // P7' follow-up: the over-count verdict is necessary but NOT sufficient. The 2026-08-06
                 // Oura night measured coverage 1.03 / PLAUSIBLE — no duplication at all, its records
                 // tiling the timeline at a fill ratio of 0.990 — and still printed SDNN 174 ms. A BANKED
@@ -1284,12 +1288,7 @@ object IntelligenceEngine {
             // in-bed span the floor came from (so they're directly comparable); a night with no banked
             // floor (no matched sleep) logs nil and the line is skipped. Logging only , no scoring change.
             // Counts/bpm only; no timestamps or PII (the diag sink also scrubs). Byte-identical to Swift.
-            val rhrFloor = res.daily.restingHr
-            if (rhrFloor != null) {
-                val inBedBpms = hr.filter { s -> res.sleepSessions.any { s.ts >= it.start && s.ts < it.end } }
-                    .map { it.bpm }
-                dayDiag(rhrFloorMeanLogLine(day, rhrFloor, inBedBpms))
-            }
+            for (l in rhrDiagLines(day, res.daily.restingHr, hr, res.sleepSessions)) dayDiag(l)
             // #103/queue-11a: SpO₂ candidate nightly mean. Only computed when the display toggle is ON,
             // and the transform is device-conditional (com.noop.data.DeviceBrandCatalog.isOura, same
             // idiom OuraRespScale.isRingRateStream uses): a WHOOP owner averages the in-band (70–100)
@@ -2929,6 +2928,31 @@ object IntelligenceEngine {
         } else {
             "$base beatAccurate=$acc>=$gate rrIntegrity=$integrity — gate passed, cause is elsewhere"
         }
+    }
+
+    /**
+     * The night's resting-HR diagnostic lines: the floor-vs-mean explainer, and the measure-only
+     * bin-population line beside it when there is something to say.
+     *
+     * Built here rather than inline in `analyzeRecentOnCpu` because that method is BUDGETED:
+     * [IntelligenceEngineJacocoBudgetTest] ratchets its JaCoCo-instrumented size against the JVM's method
+     * limit, and the budget is never raised to fit a change. Returning the lines as a list, rather than
+     * emitting each at the call site, is what pays for the second one: the caller loses the null check,
+     * both lambdas and the intermediate list.
+     */
+    private fun rhrDiagLines(
+        day: String,
+        rhrFloor: Int?,
+        hr: List<com.noop.data.HrSample>,
+        sessions: List<DetectedSleep>,
+    ): List<String> {
+        if (rhrFloor == null) return emptyList()
+        val inBedBpms = hr.filter { s -> sessions.any { s.ts >= it.start && s.ts < it.end } }.map { it.bpm }
+        val out = ArrayList<String>(2)
+        out.add(rhrFloorMeanLogLine(day, rhrFloor, inBedBpms))
+        SleepStager.rhrBinGateLogLine(day, sessions.map { it.start to it.end }, hr, rhrFloor)
+            ?.let { out.add(it) }
+        return out
     }
 
     /**

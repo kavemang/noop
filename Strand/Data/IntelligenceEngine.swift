@@ -138,6 +138,9 @@ final class IntelligenceEngine: ObservableObject {
     private struct DayScan {
         let result: AnalyticsEngine.DayResult
         let rhrLine: String?
+        /// #1943 measure-only bin-population line (see `SleepStager.rhrBinGateLogLine`); nil on a clean
+        /// night, replayed with `rhrLine` so the two read together.
+        let rhrBinLine: String?
         /// #1331 respiratory diagnostic line (see `respRateLogLine`); replayed with `rhrLine`.
         let respLine: String?
         /// CAPTURE-B (#814/#799): the resolved READ owner id this day was scored from, and how many HR rows
@@ -1362,9 +1365,12 @@ final class IntelligenceEngine: ObservableObject {
                     // covers 1.25x its wall-clock reads ~197 ms across a sleeping night, against a 40-100 ms
                     // physiological range. Printing that number beside the verdict that says it cannot be
                     // trusted invites it to be read as a measurement, so it is withheld instead; the
-                    // `rrIntegrity=` field on the same line says why. RMSSD/meanNN are NOT withheld — mean
-                    // rate survives an over-count, and RMSSD's dominant error was the emission order fixed
-                    // at the write path (#1072).
+                    // `rrIntegrity=` field on the same line says why. meanNN is NOT withheld: mean rate
+                    // survives an over-count. RMSSD is not withheld FROM THIS LINE either, but it no longer
+                    // reaches the card, the daily row or the baseline on an over-counted night — the gate
+                    // that stops it lives in `SleepStager.sessionAvgHRV` (#1118). Printing the computed
+                    // value here while the app refused to use it is a known wart, held back to keep this
+                    // line byte-identical to the Kotlin twin, whose method budget has no room for it.
                     // P7' follow-up: the over-count verdict is necessary but NOT sufficient. The
                     // 2026-08-06 Oura night measured coverage 1.03 / `plausible` — no duplication at
                     // all, its records tiling the timeline at a fill ratio of 0.990 — and still printed
@@ -1490,11 +1496,17 @@ final class IntelligenceEngine: ObservableObject {
                 // Computed here (pure inputs) and carried out so the main actor can replay it through
                 // `diagnosticSink` in the SAME per-day order , the sink is a MainActor-bound closure.
                 var rhrLine: String?
+                var rhrBinLine: String?
                 if let floor = res.daily.restingHr {
                     let inBedBpms = hr.filter { s in
                         res.cachedSleep.contains { s.ts >= $0.startTs && s.ts < $0.endTs }
                     }.map { $0.bpm }
                     rhrLine = Self.rhrFloorMeanLogLine(day: res.daily.day, floor: floor, inBedBpms: inBedBpms)
+                    // #1943: and what an artefact gate would do to that floor. Silent on a clean night.
+                    rhrBinLine = SleepStager.rhrBinGateLogLine(
+                        day: res.daily.day,
+                        sessions: res.cachedSleep.map { ($0.startTs, $0.endTs) },
+                        hr: hr, shippedFloor: floor)
                 }
                 // #1331 respiratory diagnostic — a run of nil nights localises when it stopped. Same
                 // pure-compute-here / replay-on-main-actor path as rhrLine.
@@ -1544,7 +1556,8 @@ final class IntelligenceEngine: ObservableObject {
                 // windowing + delegation lives in the byte-identical, tested `AnalyticsEngine`.
                 let (primarySessionRHR, primarySessionRHRCoverage) =
                     AnalyticsEngine.primarySessionRestingHRWithCoverage(sessions: res.sleepSessions, hr: hr)
-                let scan = DayScan(result: res, rhrLine: rhrLine, respLine: respLine,
+                let scan = DayScan(result: res, rhrLine: rhrLine, rhrBinLine: rhrBinLine,
+                                   respLine: respLine,
                                    readOwner: owner, hrRows: hr.count,
                                    sleepTrace: sleepTrace, stepsTrace: stepsTrace, hrvTrace: hrvTrace,
                                    hrvDiag: Self.mergedDayDiag(hrvDiag, strainDiagLines),
@@ -1650,6 +1663,7 @@ final class IntelligenceEngine: ObservableObject {
                 primarySessionRHRCoverageByDay[res.daily.day] = cov
             }
             if let line = scan.rhrLine { diagnosticSink?(line, nil) }
+            if let line = scan.rhrBinLine { diagnosticSink?(line, nil) }
             if let line = scan.respLine { diagnosticSink?(line, nil) }
             // Sleep & Rest test mode (E5): replay this day's gate-trace + Rest lines tagged `.sleep` so they
             // land under the profile tag in the export. Empty unless the mode is active.

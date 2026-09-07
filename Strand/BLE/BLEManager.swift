@@ -645,6 +645,13 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Pure battery-adaptive gate (#477), the twin of Android `WhoopBleClient.idleThrottleActive`. Keyed
     /// on the STRAP's battery: armed by `thresholdPct` > 0, engages while the strap is discharging at/below
     /// `thresholdPct`. The phone's own Low Power Mode deliberately does NOT trigger it. Charging never engages.
+    ///
+    /// `charging` is not purely "is charging" (#1935): on a 5/MG it is also set on pack ATTACH, so a
+    /// depleted or badly-seated pack reads true while nothing charges, and this gate then stays off. The
+    /// window is bounded — the next BATTERY_LEVEL rewrites the flag from the strap's own gauge — and the
+    /// reasoning for accepting that rather than splitting the state is on `LiveState.charging`. Read it
+    /// before adding a trend check here: making this wait for a rising gauge would delay throttle release
+    /// on every honest attach to close an edge that already closes itself.
     static func lowPowerThrottleActive(batteryPct: Int, charging: Bool, thresholdPct: Int) -> Bool {
         thresholdPct > 0 && !charging && batteryPct <= thresholdPct
     }
@@ -2913,6 +2920,27 @@ public final class BLEManager: NSObject, ObservableObject {
         Task { @MainActor in
             let frontier = await collector?.latestHRSampleTs() ?? nil
             let wallNow = Int(Date().timeIntervalSince1970)   // #928: real wall clock, at decision time
+            // #1164: publish whether the strap has banked records newer than our local frontier, so the
+            // Today Rest card can show "Pending sync" instead of a provisional number. Same behind check
+            // the auto-continue predicate uses (5-min gap), computed here because this is the one path
+            // that already reads both values. Caught-up (or unknown) → false, never a stale "pending".
+            // #1164 + #928/#1012 + #1144: the bare gap is not enough. Both traps that
+            // `shouldAutoContinue` guards against latch this flag TRUE forever, which would pin Rest to
+            // "Pending sync" and never show a score — strictly worse than the provisional number this
+            // exists to hide.
+            //  - a strap whose clock is set in the FUTURE reads ahead of ANY frontier, so the gap never
+            //    closes (there is a user-facing banner for exactly that state);
+            //  - a PHANTOM gap (a timestamp the strap will not actually offload, a console-only tail, a
+            //    dup re-offload) advertises newer data while banking no new rows, so the frontier cannot
+            //    advance and the gap stays open. `persistedSensorRows` is the same evidence #1144 added to
+            //    the auto-continue predicate for this exact latch; a caught-up strap is already false via
+            //    the gap, so gating on it only bites the phantom case.
+            if let n = newest, let f = frontier {
+                state.historyPendingSync =
+                    !BackfillContinuation.isFutureDatedNewest(n, wallNowUnix: wallNow)
+                    && persistedSensorRows
+                    && (n - f) > BackfillContinuation.defaultBehindGapSeconds
+            }
             let stillConnected = state.connected && state.bonded
             guard BackfillContinuation.shouldAutoContinue(
                 stillConnected: stillConnected,
@@ -4511,13 +4539,33 @@ public final class BLEManager: NSObject, ObservableObject {
         }   // re-arm so it can't lapse
         keepAliveTick += 1
         // #battery: ~60 s normally, ~30 s while charging (see `batteryPollDue`).
-        if BLEManager.batteryPollDue(tick: keepAliveTick, charging: state.charging == true) {
+        //
+        // WHOOP 4.0 ONLY (#1948). Both commands this block used to send are refused on a 5/MG before they
+        // leave the app: the send allowlist has no clause for `.getBatteryLevel` at all, and admits
+        // `.getBatteryPackInfo` only while a user-initiated probe is in flight. Two dead sends and two
+        // skip lines per tick, under a comment claiming the pack "rides the SAME cadence as the strap's
+        // own gauge". It never rode anything.
+        //
+        // Removing them cannot change what a 5/MG receives, and that is the whole argument: the allowlist
+        // refused both before they reached the peripheral, so no reading ever depended on either. Do not
+        // reach for a subtler one. An earlier draft here argued that the `didBond` letting this tick run
+        // had already driven the 0x2A19 read a few lines above, which is wrong twice over —
+        // `keepAliveMayRun` also admits a `bonded && .whoop5` tick with `didBond` false, and
+        // `enableLiveNotifications` is separately gated on `didBond`, so on a #1635 strap the tick fires
+        // and that read does not.
+        //
+        // Which leaves a real divergence, pre-existing and NOT introduced here: Android's keep-alive polls
+        // 0x2A19 for a 5/MG whenever it runs, while this one skips it unless `didBond`. An unbonded 5/MG
+        // therefore gets a periodic battery read on Android and none here. The pack's charge comes from
+        // the pushed pack-info event (109) on both, that flag's only writer since #1945.
+        //
+        // This leaves opcode 151 with NO sender on iOS, which is the state `FrameRouter` already records
+        // for its own decoder ("nothing sent the command, so the decoder had no caller"). Android keeps a
+        // user-initiated probe for it; there is no iOS twin of that, so asking a 5/MG whether it answers
+        // 151 at all is an Android-side question today.
+        if selectedModel.deviceFamily != .whoop5,
+           BLEManager.batteryPollDue(tick: keepAliveTick, charging: state.charging == true) {
             send(.getBatteryLevel, payload: [])
-            // The 5/MG battery pack rides the SAME cadence as the strap's own gauge — it is the same
-            // question about the same physical thing, and a second timer would only be a second thing to
-            // get wrong. 5/MG only: a 4.0 never answers 151 (its pack is voltage-only via 98), so asking
-            // would be traffic with no reply.
-            if selectedModel.deviceFamily == .whoop5 { send(.getBatteryPackInfo, payload: []) }
         }
     }
 
@@ -5803,6 +5851,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         lastSessionEndTrim = nil
         backfilling = false
         state.backfilling = false
+        state.historyPendingSync = false   // #1164: a stale "pending" must not outlive the link
         state.syncChunksThisSession = 0
         // A mid-sync disconnect bypasses exitBackfilling, so clear the reject counters here too —
         // otherwise a stale non-zero count survives until the next beginBackfill. (#77/#91)
@@ -6632,6 +6681,27 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             // UNIVERSAL clock-drift snapshot (RTC cluster #531/#767/#804/#812): bank the [oldest, newest]
             // window onto LiveState UNCONDITIONALLY (observability, not gated) for the export assembler.
             if feedsSync { state.setStrapRange(newestUnix: newest, oldestUnix: (oldest.map { $0 < newest } ?? false) ? oldest : nil) }
+            // #1164: recompute the "strap has banked records newer than our frontier" flag so the Today
+            // Rest card can show "Pending sync" right after connect (before the first offload starts),
+            // not only after an offload completes. The frontier read is async; the flag settles a beat
+            // after the range lands. feedsSync only (5/MG sync is unconfirmed — leave it untouched).
+            if feedsSync {
+                let newestForPending = newest
+                Task { @MainActor in
+                    let frontier = await collector?.latestHRSampleTs() ?? nil
+                    if let f = frontier {
+                        // #928/#1012: a strap whose clock is set in the FUTURE reads ahead of ANY
+                        // frontier, so without this the gap never closes and Rest is pinned to "Pending
+                        // sync" for good. The phantom-gap guard used at the post-offload site cannot apply
+                        // here: no offload has run yet, so there is no row evidence to weigh. The first
+                        // completed pass corrects it.
+                        let wallNowP = Int(Date().timeIntervalSince1970)
+                        state.historyPendingSync =
+                            !BackfillContinuation.isFutureDatedNewest(newestForPending, wallNowUnix: wallNowP)
+                            && (newestForPending - f) > BackfillContinuation.defaultBehindGapSeconds
+                    }
+                }
+            }
             // Connection test mode: promote the CLOCK-DRIFT picture to one upfront tagged line (#767/#754).
             if TestCentre.active(.connection) {
                 let line = ConnectionTrace.clockDriftLine(

@@ -2773,17 +2773,86 @@ public enum SleepStager {
     // MARK: - Per-session HR / HRV
 
     /// Lowest 5-min rolling-mean HR during the session (bpm), or nil.
+    ///
+    /// The window is CLOSED at both ends, so the binning is too: bins are `[t, t + windowS)` except
+    /// the final one, which is `[t, end]`. Half-open bins alone would admit a sample sitting exactly
+    /// on an aligned `end` through the prefilter and then place it in no bin — counted as data,
+    /// silently ignored. A zero-length window (`start == end`) is that single closed bin.
+    /// #1943: what an artefact gate WOULD do to tonight's resting-HR floor, measured and reported without
+    /// changing it.
+    ///
+    /// `sessionRestingHR` takes the minimum of the 5-minute bin means unconditionally, so any non-empty
+    /// bin can win, including one built from a single sample at the edge of a wear gap. The helper deleted
+    /// alongside it had two conditions the shipped path never had: a bin may only WIN when it holds at
+    /// least `minBinSamples` samples and its mean is at least `minPlausibleBpm`. Porting them is a small
+    /// change; what nobody can currently say is how OFTEN it would move a displayed number, and that
+    /// number feeds the baseline later nights are scored against. So measure first.
+    ///
+    /// Bins are built exactly as `sessionRestingHR` builds them, closed final bin included, or the line
+    /// would describe a different partition than the one it is judging.
+    ///
+    /// Returns nil unless the gate would actually MOVE the floor, so the log carries only the nights the
+    /// question is about. Reporting every thin bin instead would fire on nearly all of them, because a thin
+    /// final bin is STRUCTURAL rather than an artefact: the last bin closes on `end`, so a session whose
+    /// span is not a multiple of the window holds only `span mod 300` samples there. A 1801-second night
+    /// has six 300-sample bins and a final bin of two. That bin is real data and almost never wins the
+    /// floor, so it is noise to report and, separately, something a future gate should weigh before
+    /// excluding bins on sample count alone.
+    ///
+    /// The counts still ride along when the line does fire, since they are the context for the change.
+    /// Same posture as the over-count-only R-R dump. Counts and bpm only, no timestamps. Pure. Twin of
+    /// Kotlin `rhrBinGateLogLine`.
+    public static func rhrBinGateLogLine(day: String, sessions: [(Int, Int)], hr: [HRSample],
+                                         shippedFloor: Int, minBinSamples: Int = 5,
+                                         minPlausibleBpm: Double = 25) -> String? {
+        let windowS = 5 * 60
+        var bins = 0, thin = 0, implausible = 0, bestN = 0
+        var best: Double?
+        var gated: Double?
+        for (start, end) in sessions {
+            let seg = hr.filter { $0.ts >= start && $0.ts <= end }
+            if seg.isEmpty { continue }
+            var t = start
+            repeat {
+                let isFinal = t + windowS >= end
+                let win = seg.filter { $0.ts >= t && (isFinal || $0.ts < t + windowS) }
+                if !win.isEmpty {
+                    bins += 1
+                    let mean = Double(win.reduce(0) { $0 + $1.bpm }) / Double(win.count)
+                    if win.count < minBinSamples { thin += 1 }
+                    if mean < minPlausibleBpm { implausible += 1 }
+                    if best == nil || mean < best! { best = mean; bestN = win.count }
+                    if win.count >= minBinSamples, mean >= minPlausibleBpm,
+                       gated == nil || mean < gated! { gated = mean }
+                }
+                t += windowS
+            } while t < end
+        }
+        if bins == 0 { return nil }
+        let gatedFloor = gated.map { Int($0.rounded()) }
+        let changes = gatedFloor != nil && gatedFloor != shippedFloor
+        if !changes { return nil }
+        return "rhr bins day=\(day) bins=\(bins) thin=\(thin) implausible=\(implausible) "
+            + "winnerN=\(bestN) floor=\(shippedFloor) gated=\(gatedFloor.map(String.init) ?? "nil") "
+            + "wouldChange=\(changes) (measure-only; nothing is gated yet)"
+    }
+
     static func sessionRestingHR(start: Int, end: Int, hr: [HRSample]) -> Int? {
         let seg = hr.filter { $0.ts >= start && $0.ts <= end }
         guard !seg.isEmpty else { return nil }
         let windowS = 5 * 60
         var means: [Double] = []
         var t = start
-        while t < end {
-            let win = seg.filter { $0.ts >= t && $0.ts < t + windowS }
+        repeat {
+            // The last bin (its half-open end reaches or passes `end`) closes on `end` instead,
+            // catching an endpoint sample the prefilter already admitted. `seg` holds nothing past
+            // `end`, so "everything from t onwards" IS [t, end]. `repeat` runs once for a
+            // zero-length window, where that single closed bin is the whole window.
+            let isFinal = t + windowS >= end
+            let win = seg.filter { $0.ts >= t && (isFinal || $0.ts < t + windowS) }
             if !win.isEmpty { means.append(Double(win.reduce(0) { $0 + $1.bpm }) / Double(win.count)) }
             t += windowS
-        }
+        } while t < end
         if let m = means.min() { return Int(m.rounded()) }
         let all = Double(seg.reduce(0) { $0 + $1.bpm }) / Double(seg.count)
         return Int(all.rounded())
@@ -2802,12 +2871,42 @@ public enum SleepStager {
     /// Uses the same range-filter + ≥2-valid-interval rule as hrv.rmssd().
     static func sessionAvgHRV(start: Int, end: Int, rr: [RRInterval]) -> Double? {
         let vals = sessionHrvWindows(start: start, end: end, rr: rr, stages: []).compactMap { $0.rmssd }
-        return vals.isEmpty ? nil : vals.reduce(0, +) / Double(vals.count)
+        if vals.isEmpty { return nil }
+        // #1118: refuse the night outright when its own R-R banks more beat-time than the wall clock it
+        // spans. Gated HERE rather than at the caller because this is where RMSSD BECOMES the day's HRV:
+        // one seam covers the daily row, the sleep-session cache, the Health card and the baseline that
+        // later nights are scored against, so none of them can end up disagreeing about whether the night
+        // was trustworthy. See `HRVAnalyzer.successiveDiffIsTrustworthy` for why an over-count corrupts a
+        // successive-difference statistic and why a blank is the right answer.
+        //
+        // Classified over the SAME beats the value was built from, windowed [start, end] exactly as
+        // `sessionHrvWindows` does, so the verdict cannot describe a different set of beats than the number
+        // it is gating.
+        let seg = rr.filter { $0.ts >= start && $0.ts <= end }
+        let segTs = seg.map { $0.ts }
+        let segMs = seg.map { Double($0.rrMs) }
+        let coverage = HRVAnalyzer.rrCoverage(tsSec: segTs, rrMs: segMs)
+        // `collapsed` is deliberately the SAME figure as `coverage`, which pins every over-count here to
+        // crossSecondOverCount. That is not a claim about which kind it is. The collapsed figure exists only
+        // to choose BETWEEN the two over-count verdicts, and this gate refuses both, so the real one would
+        // change no outcome — while costing a full sort of the night's ~50-70k beats, since
+        // `collapsedCoverage` opens with a sort. This runs per session, per day, across ~21 days of every
+        // analyzeRecent, every 15 minutes; #1510 cut this exact path from six sorts a night to two, and
+        // buying a distinction the caller discards would hand that back. `rrCoverage` is a single O(n)
+        // pass. If a future gate ever needs the two over-count cases apart, compute it then.
+        let verdict = HRVAnalyzer.classifyCoverage(coverage: coverage, collapsed: coverage)
+        guard HRVAnalyzer.successiveDiffIsTrustworthy(verdict) else { return nil }
+        return vals.reduce(0, +) / Double(vals.count)
     }
 
     /// Per-5-min-window RMSSD across a session, each window tagged with the sleep stage at its CENTER
     /// (from `stages`) — the SINGLE source `sessionAvgHRV` averages, and the HRV nightly trace reads.
     /// Passing `[]` for `stages` tags every window "?" (the plain-average path needs no stages). (#141)
+    ///
+    /// Windows follow the same closed-window rule as `sessionRestingHR`: `[t, t + windowS)` except
+    /// the final one, which is `[t, end]`, so a beat sitting exactly on an aligned `end` lands in a
+    /// window instead of being admitted by the prefilter and then dropped. Window stage tagging and
+    /// `startTs` are unchanged — the final window keeps its half-open center `t + windowS / 2`.
     static func sessionHrvWindows(start: Int, end: Int, rr: [RRInterval], stages: [StageSegment]) -> [HrvWindow] {
         // CONTRACT: `rr` MUST already be ts-sorted (RMSSD is built from SUCCESSIVE differences, so a bucket
         // has to be chronological). The value path passes the loop's pre-sorted `rrS`; the trace caller sorts
@@ -2818,8 +2917,12 @@ public enum SleepStager {
         let windowS = 5 * 60
         var out: [HrvWindow] = []
         var t = start
-        while t < end {
-            let bucket = seg.filter { $0.ts >= t && $0.ts < t + windowS }.map { Double($0.rrMs) }
+        repeat {
+            // Final window closes on `end` — same closed-window rule as sessionRestingHR, so an
+            // endpoint beat counts instead of vanishing after admission. `repeat` runs once for a
+            // zero-length window, where that single closed window is the whole session.
+            let isFinal = t + windowS >= end
+            let bucket = seg.filter { $0.ts >= t && (isFinal || $0.ts < t + windowS) }.map { Double($0.rrMs) }
             // Full clean (range + Malik ectopic rejection), not just range — matches the
             // analyze() pipeline. The 0x2A37 RR on a WHOOP 5/MG is PPG-derived and noisier
             // than a 4.0's; rMSSD is built from SUCCESSIVE differences, so an un-rejected
@@ -2832,7 +2935,7 @@ public enum SleepStager {
             let stage = stages.first { center >= $0.start && center < $0.end }?.stage ?? "?"
             out.append(HrvWindow(startTs: t, stage: stage, cleanBeats: cleaned.nn.count, rmssd: rmssd))
             t += windowS
-        }
+        } while t < end
         return out
     }
 

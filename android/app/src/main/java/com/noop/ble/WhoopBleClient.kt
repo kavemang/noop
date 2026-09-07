@@ -165,10 +165,39 @@ data class LiveState(
      *  reconnects (or the settle timeout gives up). With `!connected` it drives the Devices card's
      *  transient "Reconnecting…" pill. Twin of macOS LiveState.rebootInProgress. */
     val rebootInProgress: Boolean = false,
-    /** Charging flag from BATTERY_LEVEL events — wire observation: u8 bit0 (4.0 @26 / 5.0 @30,
-     *  ~every 8 min on captured links). Flag only; battery % keeps its family source (#77).
-     *  Cleared on disconnect so a stale flag can't outlive the link. Twin of macOS
-     *  LiveState.charging. */
+    /** Charging flag. Two sources, and they mean different things (#1935).
+     *
+     *  The authority is BATTERY_LEVEL — wire observation: u8 bit0 (4.0 @26 / 5.0 @30, ~every 8 min on
+     *  captured links). That is a LEVEL signal from the strap's own gauge: every live battery event
+     *  rewrites this flag, whatever it was.
+     *
+     *  On a 5/MG it is ALSO set by BATTERY_PACK_CONNECTED(21) and cleared by BATTERY_PACK_REMOVED(22),
+     *  which is a latency win — 21 leads CHARGING_ON(7) by up to ~17 s in captures, so the pill responds
+     *  when the pack goes on. But 21 means A PACK WAS ATTACHED, not that charging began. They diverge on
+     *  a depleted pack or a poor contact: 21 fires, 7 never does, and this reads true while nothing
+     *  charges.
+     *
+     *  THAT STATE IS BOUNDED, which is why it is documented rather than split. It does not last until 22:
+     *  the next live BATTERY_LEVEL overwrites it from the strap's own GAUGE, so the window is about one
+     *  battery cadence, and the gauge always gets the last word.
+     *
+     *  THE GAUGE ONLY GETS THE LAST WORD BECAUSE NOTHING ELSE REPEATS. That is a real constraint, not an
+     *  observation (#1935): the pushed pack-info event (109) used to write charging=true too, keyed on
+     *  pack PRESENCE plus a plausible SoC, as an anti-staleness half for a missed attach edge. It repeats
+     *  every couple of minutes, so it outran the ~8 min BATTERY_LEVEL and a flat or badly seated pack read
+     *  "charging" for its whole attachment instead of self-correcting. It now writes [packSocPct] alone,
+     *  which is what the anti-staleness job actually wanted. So: an EDGE may set this flag (7, 21, 22), a
+     *  repeating presence signal must not, or the gauge stops being able to correct it.
+     *
+     *  It matters beyond the pill. [WhoopBleClient.idleThrottleActive] reads this flag and gates THREE
+     *  levers, not one: the low-battery offload cadence, the GATT connection-priority throttle, and the
+     *  continuous-capture pause behind the user's own "Pause HRV capture" percentage. So a strap on a flat
+     *  pack can skip low-battery throttling and keep background capture running after the user asked for
+     *  it to stop, for that window. [WhoopBleClient.batteryPollDue] also reads it, polling every tick
+     *  instead of every other, which is harmless and arguably wanted with a pack on.
+     *
+     *  Flag only; battery % keeps its family source (#77). Cleared on disconnect so a stale flag can't
+     *  outlive the link. Twin of macOS LiveState.charging. */
     val charging: Boolean? = null,
     /** Battery-pack charge, tenths-of-a-percent precision, from the pushed pack event (109) payload.
      *  5/MG only — a WHOOP 4.0 has no pack fuel gauge (its pack reads as a VOLTAGE via opcode 98, a
@@ -200,6 +229,13 @@ data class LiveState(
     /** True while a historical offload session is running, so screens can say "Syncing strap
      *  history…" instead of presenting half-loaded data as final (#77). */
     val backfilling: Boolean = false,
+    /** #1164 — true when the strap reports banked records newer than our local HR frontier (the strap
+     *  has data we haven't ingested yet), even when no offload is actively running. Set from the
+     *  GET_DATA_RANGE newest vs. the collector's latest HR sample, with the same 5-min
+     *  `behindGapSeconds` the auto-continue predicate uses. Cleared on disconnect so a stale "pending"
+     *  can't outlive the link. Drives the Today Rest "Pending sync" state so a provisional score isn't
+     *  shown as final before the full night is offloaded. Twin of the Swift LiveState.historyPendingSync. */
+    val historyPendingSync: Boolean = false,
     /** True while a post-history scoring pass is turning the newly stored raw streams into sleep and
      * daily metrics. Kept separate from [backfilling] so Sleep can distinguish downloading from calculating. */
     val analyzingHistory: Boolean = false,
@@ -738,7 +774,14 @@ class WhoopBleClient(
          *  strap is DISCHARGING at/below [thresholdPct]. The
          *  phone's own Battery Saver deliberately does NOT trigger it — power saving is about the strap's
          *  charge, not the phone's. A charging strap never throttles. The threshold is its own hysteresis
-         *  (battery % moves slowly, so a boundary crossing flips at most once per point). */
+         *  (battery % moves slowly, so a boundary crossing flips at most once per point).
+         *
+         *  [LiveState.charging] is not purely "is charging" (#1935): on a 5/MG it is also set on pack
+         *  ATTACH, so a depleted or badly-seated pack reads true while nothing charges, and this gate then
+         *  stays off. The window is bounded — the next BATTERY_LEVEL rewrites the flag from the strap's own
+         *  gauge — and the reasoning for accepting that rather than splitting the state is on that field.
+         *  Read it before adding a trend check here: making this wait for a rising gauge would delay
+         *  throttle release on every honest attach to close an edge that already closes itself. */
         fun idleThrottleActive(batteryPct: Int, charging: Boolean, thresholdPct: Int): Boolean =
             thresholdPct > 0 && !charging && batteryPct <= thresholdPct
 
@@ -1575,6 +1618,25 @@ class WhoopBleClient(
             val to = from + 12
             if (from < 0 || to > rawHex.length) return rawHex
             return rawHex.substring(0, from) + "••••••••••••" + rawHex.substring(to)
+        }
+
+        /**
+         * Mask the pack's six address bytes inside the event-census `payload=` hex, and nothing else.
+         * Event 109 (the pushed pack record, see BatteryPackInfo) carries the pack's BT address at
+         * payload offset 5..10. `redactStrapLogPii` lifts an ASCII serial out of a hex run but has no
+         * rule that reaches a colon-less address, so without this the census publishes the address in
+         * every shared strap log. Same rule as [maskPackAddrInDump]: blanked only once `decodeEventFrame`
+         * has confirmed a present pack at the expected layout — for any other event, or an undecodable
+         * 109, the payload stays whole, because there the bytes ARE the evidence the census exists for.
+         */
+        internal fun maskPackAddrInEventPayload(payloadHex: String, frame: ByteArray): String {
+            if (frame.size <= 10 || (frame[10].toInt() and 0xFF) != com.noop.protocol.BatteryPackInfo.PACK_INFO_EVENT) return payloadHex
+            val info = com.noop.protocol.BatteryPackInfo.decodeEventFrame(frame)
+            if (info == null || !info.present) return payloadHex
+            val from = 5 * 2
+            val to = from + 12
+            if (to > payloadHex.length) return payloadHex
+            return payloadHex.substring(0, from) + "••••••••••••" + payloadHex.substring(to)
         }
 
         /**
@@ -2535,6 +2597,11 @@ class WhoopBleClient(
      *  @Volatile: cleared on the main looper, read in the notify handler on the binder thread. */
     @Volatile
     private var unbondedProbeAwaitingReply = false
+
+    /** True once the probe's skip reason has been logged on this link (#1949), so a retried start does
+     *  not repeat it. Cleared with the rest of the per-link probe state. */
+    @Volatile
+    private var unbondedProbeSkipLogged = false
 
     /** #1635: the probe has run on THIS link. Separate from [unbondedProbeAwaitingReply] because the
      *  keep-alive drains the same CCCD queue every 30s and would otherwise re-enter the probe's own
@@ -5241,16 +5308,50 @@ class WhoopBleClient(
 
     private fun beginUnbondedOffloadProbe(g: BluetoothGatt) {
         val refused = unbondedOffloadPreviouslyRefused(g.device.address)
+        // Read each input ONCE: the gate's verdict and the line that explains it must be about the same
+        // state, or the log will name a reason that was not the one that decided.
+        val isWhoop5Now = connectedFamily == DeviceFamily.WHOOP5
+        val optedInNow = PuffinExperiment.from(context).unbondedOffload
+        val bondedNow = didBond
+        val helloWrittenNow = helloWrittenThisLink
+        val alreadyProbedNow = unbondedProbeStartedThisLink
+        val silentLinksNow = unbondedProbeSilentLinks
         if (!shouldProbeUnbondedOffload(
-                isWhoop5 = connectedFamily == DeviceFamily.WHOOP5,
-                optedIn = PuffinExperiment.from(context).unbondedOffload,
-                bonded = didBond,
-                helloWrittenThisLink = helloWrittenThisLink,
-                alreadyProbedThisLink = unbondedProbeStartedThisLink,
+                isWhoop5 = isWhoop5Now,
+                optedIn = optedInNow,
+                bonded = bondedNow,
+                helloWrittenThisLink = helloWrittenNow,
+                alreadyProbedThisLink = alreadyProbedNow,
                 previouslyRefused = refused,
-                silentLinksSoFar = unbondedProbeSilentLinks,
+                silentLinksSoFar = silentLinksNow,
             )
-        ) return
+        ) {
+            // #1949: say WHY, once per link. UNGATED, unlike the pairing dump, and deliberately so: the
+            // domain argument to log() is a TAG rather than a gate, so this lands in an ordinary strap
+            // log. That is the point — it explains a silence to whoever reads the log they already have,
+            // and it costs one line, only on a no-hello 5/MG link, which is the only place the probe is
+            // scheduled. The dump is eight lines of readout and stays behind the Test Centre domain.
+            //
+            // A silent return here is what made an MG capture unreadable:
+            // the puffin chars discovered, never subscribed, and no way to tell the app declined from the
+            // strap refusing — opposite meanings for #1635. Once per link, because this path is retried.
+            if (!unbondedProbeSkipLogged) {
+                unbondedProbeSkipLogged = true
+                // The SAME values the gate just refused on, not a second read of each. `didBond` and the
+                // rest are @Volatile and the pref is a live file read, so re-reading them here could
+                // explain the skip with a state that is no longer the one that caused it.
+                unbondedProbeSkippedLine(
+                    isWhoop5 = isWhoop5Now,
+                    optedIn = optedInNow,
+                    bonded = bondedNow,
+                    helloWrittenThisLink = helloWrittenNow,
+                    alreadyProbedThisLink = alreadyProbedNow,
+                    previouslyRefused = refused,
+                    silentLinksSoFar = silentLinksNow,
+                )?.let { log(it, com.noop.testcentre.TestDomain.CONNECTION) }
+            }
+            return
+        }
         // Stand aside while the DIS chain still holds the one serialized GATT queue. The fixed 6s delay
         // this used to rely on was chosen by reasoning and was wrong: a capture caught the chain still
         // running at 7s, every CCCD write returning busy, all four abandoned after the shared retry
@@ -6781,6 +6882,42 @@ class WhoopBleClient(
                         ), com.noop.testcentre.TestDomain.CONNECTION)
                     }
                 }
+                // #1949: and what we HAVE with the strap, next to what it offers. The sibling dump above
+                // covers fd4b0002, the write char; this covers the four NOTIFY chars the offload and the
+                // realtime IMU producer both arrive on. A capture showed all four discovered, one
+                // standard-HR subscribe, and nothing more — which reads identically to the strap refusing
+                // them. Only HEART_RATE_CHAR and BATTERY_CHAR reach `cccdQueue` below on a 5/MG, so
+                // "subscribed=no" here is the app's own doing and the log should say so rather than
+                // leave it to be inferred. Local reads only, like its sibling: no GATT operation.
+                //
+                // Per CONNECT, unlike the tree above which is once per strap, and the difference is the
+                // point: the tree is static for a device while this is exactly the state that changes
+                // between links — a bond acquired, a hello written, the opt-in flipped. Seven lines
+                // against that sibling's thirty, so a reconnect loop costs a quarter as much as the
+                // enumeration that deliberately declined to repeat.
+                if (testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
+                    val notifyDump = runCatching {
+                        WHOOP5_NOTIFY_CHARS.mapNotNull { u ->
+                            whoop5.getCharacteristic(u)?.let { ch ->
+                                NotifyCharDump(
+                                    uuid = u.toString().take(8),
+                                    hasCccd = ch.getDescriptor(CCCD) != null,
+                                )
+                            }
+                        }
+                    }.getOrDefault(emptyList())
+                    for (line in whoop5PairingDumpLines(
+                        bondState = runCatching { g.device.bondState }.getOrDefault(-1),
+                        didBond = didBond,
+                        helloWrittenThisLink = helloWrittenThisLink,
+                        probeOptedIn = runCatching {
+                            PuffinExperiment.from(context).unbondedOffload
+                        }.getOrDefault(false),
+                        notifyChars = notifyDump,
+                    )) {
+                        log(line, com.noop.testcentre.TestDomain.CONNECTION)
+                    }
+                }
             } else {
                 log("Custom WHOOP service not found on this peripheral")
             }
@@ -7420,6 +7557,27 @@ class WhoopBleClient(
                                 )
                                 log(line, com.noop.testcentre.TestDomain.UNIVERSAL)
                             }
+                            // #1164: recompute the "strap has banked records newer than our frontier" flag
+                            // so the Today Rest card can show "Pending sync" right after connect (before the
+                            // first offload starts), not only after an offload completes. The frontier read
+                            // is async; the flag settles a beat after the range lands.
+                            val newestForPending = it
+                            ioScope.launch {
+                                val f = runCatching { repository.latestHrSampleTs(deviceId) }.getOrNull()
+                                if (f != null) {
+                                    // #928/#1012: a strap whose clock is set in the FUTURE reads ahead
+                                    // of ANY frontier, so without this the gap never closes and Rest is
+                                    // pinned to "Pending sync" for good. The phantom-gap guard used at the
+                                    // post-offload site cannot apply here: no offload has run yet, so there
+                                    // is no row evidence to weigh. The first completed pass corrects it.
+                                    val wallNowP = System.currentTimeMillis() / 1000L
+                                    val p = !isFutureDatedNewest(newestForPending, wallNowP) &&
+                                        (newestForPending - f) > AUTO_CONTINUE_BEHIND_GAP_SECONDS
+                                    if (_state.value.historyPendingSync != p) {
+                                        _state.value = _state.value.copy(historyPendingSync = p)
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -7867,7 +8025,8 @@ class WhoopBleClient(
                     // one), and the 5/MG opaque payload hex — which is where a pack charge would live if
                     // any event carries one. Read-only; sends nothing and decodes nothing into state.
                     if (testCentre.active(com.noop.testcentre.TestDomain.CONNECTION)) {
-                        val payHex = parsed.parsed["event_payload_hex"] as? String
+                        val payHex = (parsed.parsed["event_payload_hex"] as? String)
+                            ?.let { maskPackAddrInEventPayload(it, frame) }
                         log("[event] $ev${if (replayedOffload) " (replayed offload)" else ""}" +
                             (payHex?.let { " payload=$it" } ?: ""))
                     }
@@ -7977,11 +8136,19 @@ class WhoopBleClient(
                                     // command path and the event path end up disagreeing about the same
                                     // pack, which is the drift decodeRecord() exists to prevent.
                                     if (info.displayable && soc != null) {
-                                        // charging=true here as well as on event 21 is the anti-staleness
-                                        // half: if the attach edge was missed (app started with the pack
-                                        // already on, or the link dropped over the attach), this repeating
-                                        // event re-establishes the state within a couple of minutes.
-                                        _state.update { s -> s.copy(packSocPct = soc, charging = true) }
+                                        // SoC ONLY, deliberately (#1935). This event says a pack is
+                                        // ATTACHED and how full it is, never that current is flowing.
+                                        // It used to write charging=true as well, as the anti-staleness
+                                        // half for a missed attach edge — but it repeats every couple of
+                                        // minutes, so it outran the ~8 min BATTERY_LEVEL that corrects the
+                                        // flag from the strap's own GAUGE, and a flat or badly seated pack
+                                        // then read "charging" for the whole attachment instead of
+                                        // self-correcting. BATTERY_PACK_CONNECTED(21) still lights the pill
+                                        // on the attach edge, so the latency win survives; the gauge now
+                                        // gets the last word, which is what iOS already did. A missed
+                                        // attach edge costs at most one battery cadence of lag and is then
+                                        // RIGHT, instead of being fast and possibly wrong.
+                                        _state.update { s -> s.copy(packSocPct = soc) }
                                     } else if (!info.present) {
                                         _state.update { s -> s.copy(packSocPct = null) }
                                     }
@@ -8301,12 +8468,16 @@ class WhoopBleClient(
                     // #battery: ~60 s normally, ~30 s while charging (see [batteryPollDue]).
                     if (batteryPollDue(keepAliveTick, s.charging == true)) send(CommandNumber.GET_BATTERY_LEVEL)
                 } else if (connectedFamily == DeviceFamily.WHOOP5) {
-                    // The battery pack rides the SAME cadence as the strap's own gauge — the same question
-                    // about the same physical thing, and a second timer would only be a second thing to get
-                    // wrong. 5/MG only: a 4.0 never answers 151 (its pack is voltage-only via 98).
-                    if (batteryPollDue(keepAliveTick, s.charging == true)) {
-                        send(CommandNumber.GET_BATTERY_PACK_INFO)
-                    }
+                    // NO pack poll here (#1948). This used to send GET_BATTERY_PACK_INFO on the same
+                    // cadence as the gauge, with a comment saying the pack "rides the SAME cadence".
+                    // It never did: the 5/MG send allowlist admits opcode 151 ONLY while a user-initiated
+                    // probe is in flight, so every one of these was refused before it left the app. A
+                    // capture caught 40 of them in 40 minutes, one wasted call and one skip line a minute.
+                    //
+                    // Nothing is lost by not asking. The pack's charge arrives on the pushed pack-info
+                    // event (109), which since #1945 is its only writer, and the STRAP's own percent comes
+                    // from the 0x2A19 read below, not from a command. The probe path is untouched, and
+                    // remains how the hardware question ("does a 5/MG answer 151 at all?") gets asked.
                     // #1865: re-arm a LAPSED realtime stream. The WHOOP4 branch above re-sends
                     // TOGGLE_REALTIME_HR every tick precisely because "the firmware lets the realtime HR
                     // stream lapse if it isn't re-armed" — a 5/MG got none of that, on the reasoning that it
@@ -10287,6 +10458,28 @@ class WhoopBleClient(
         ioScope.launch {
             val frontier = runCatching { repository.latestHrSampleTs(deviceId) }.getOrNull()
             val wallNow = System.currentTimeMillis() / 1000L   // #928: real wall clock, at decision time
+            // #1164: publish whether the strap has banked records newer than our local frontier, so the
+            // Today Rest card can show "Pending sync" instead of a provisional number. Same behind check
+            // the auto-continue predicate uses (5-min gap). Caught-up (or unknown) → false.
+            // #1164 + #928/#1012 + #1144: the bare gap is not enough. Both traps that
+            // `shouldAutoContinue` guards against latch this flag TRUE forever, which would pin
+            // Rest to "Pending sync" and never show a score — strictly worse than the
+            // provisional number this exists to hide.
+            //  - a strap whose clock is set in the FUTURE reads ahead of ANY frontier, so the
+            //    gap never closes (there is a user-facing banner for exactly that state);
+            //  - a PHANTOM gap (a timestamp the strap will not actually offload, a console-only
+            //    tail, a dup re-offload) advertises newer data while banking no new rows, so the
+            //    frontier cannot advance and the gap stays open. `persistedSensorRows` is the
+            //    same evidence #1144 added to the auto-continue predicate for this exact latch;
+            //    a caught-up strap is already false via the gap, so gating on it only bites the
+            //    phantom case.
+            val pending = newest != null && frontier != null &&
+                !isFutureDatedNewest(newest, wallNow) &&
+                persistedSensorRows &&
+                (newest - frontier) > AUTO_CONTINUE_BEHIND_GAP_SECONDS
+            if (_state.value.historyPendingSync != pending) {
+                _state.value = _state.value.copy(historyPendingSync = pending)
+            }
             // #266: local only — NOT cached on the instance. A future-dated newest (#1012) makes the
             // AUTOMATIC periodic/strap kicks near-useless for THIS decision; [requestSync] recomputes its
             // own verdict fresh from [strapNewestTs] on every call, so a stale value here can't leak forward.
@@ -10646,6 +10839,7 @@ class WhoopBleClient(
         _state.update { it.clearedBiometrics().copy(
             connected = false, bonded = false, encryptedBond = false,
             backfilling = false, syncChunksThisSession = 0,
+            historyPendingSync = false,   // #1164: a stale "pending" must not outlive the link
             charging = null,        // a stale charging flag must not outlive the link
             strapFirmware = null,   // nor stale firmware/layout versions
             historyLayoutVersion = null,
@@ -10867,6 +11061,7 @@ class WhoopBleClient(
             chargeUnbondedProbeSilence()
         }
         unbondedProbeStartedThisLink = false
+        unbondedProbeSkipLogged = false
         unbondedProbeDeferrals = 0
         disChainInFlight = false
         unbondedProbeSubscribed = 0
