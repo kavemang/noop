@@ -2800,9 +2800,17 @@ public final class BLEManager: NSObject, ObservableObject {
                 // #1683: when the strap's own newest record dates the silence, SAY it. The generic copy
                 // below omits that and promises a recovery the charge advice has already been retried for
                 // every session; the dated version is the one a stuck user can act on.
+                //
+                // #1754: the generic "clock lost sync" copy is only correct when the strap reported
+                // trim=0xFFFFFFFF (no valid flash cursor). A strap with a valid, advancing flash cursor
+                // that banks no sensor records has a different problem — the sensor front-end or power,
+                // not the clock — and telling the user to charge it sends them away from the real cause.
+                // The two states are distinguished by `backfiller.sawNoFlashCursor`.
                 state.lastSyncError = sustainedEmpty
                     ? (staleNewest.map { Backfiller.staleRecordBanner(newestUnix: $0, wallNowUnix: wallNowUnix) }
-                        ?? "Synced, but your strap had no stored history to hand over - only its diagnostic output. This usually means its clock has lost sync, so it isn't saving data to flash. Fully charge it to 100%, then reconnect, and it should start banking again.")
+                        ?? (backfiller?.sawNoFlashCursor == true
+                            ? Backfiller.noFlashCursorBanner
+                            : Backfiller.noSensorRecordsBanner))
                     : nil
             } else if let futureBanner = futureClockBanner {
                 // #324/#928: the strap banked records but its newest is dated implausibly in the FUTURE
@@ -4507,6 +4515,23 @@ public final class BLEManager: NSObject, ObservableObject {
         }
         // The watchdog above is the whole of the keep-alive an unbonded 5/MG can use. Everything below
         // sends puffin-framed work that needs the encrypted bond.
+        //
+        // #1953: an unbonded 5/MG (the #1635 suppressed-hello case) still gets a periodic 0x2A19 battery
+        // read on Android — `keepAliveFire` there gates on `bonded` (the live-HR shortcut), not on the
+        // encrypted bond, and polls battery on the same ~60 s cadence regardless. iOS gates the tick on
+        // `keepAliveMayRun` (which admits `bonded && .whoop5`) but the battery read lives inside
+        // `enableLiveNotifications`, which is `didBond`-gated — so the tick fires and the read does not,
+        // and an unbonded 5/MG's battery % refreshes only when the UI asks. Poll 0x2A19 here on the SAME
+        // throttle `enableLiveNotifications` uses, so the two platforms read at the same cadence without
+        // doubling the rate on a bonded strap (this path only runs when `!didBond`).
+        if !didBond, selectedModel.deviceFamily == .whoop5,
+           let p = peripheral, let b = batteryCharacteristic, b.properties.contains(.read),
+           BLEManager.shouldPollWhoop5Battery(lastReadAt: lastBatteryReadAt,
+                                              charging: state.charging == true) {
+            p.readValue(for: b)
+            lastBatteryReadAt = Date()
+            log("Reading 5/MG battery (unbonded keep-alive) (#1953)")
+        }
         guard didBond else { return }
         guard !backfilling else { return }            // never poke the strap mid-offload
         // #927: continuous capture can be overnight-only, which makes the want TIME-dependent; nothing
@@ -4554,10 +4579,11 @@ public final class BLEManager: NSObject, ObservableObject {
         // `enableLiveNotifications` is separately gated on `didBond`, so on a #1635 strap the tick fires
         // and that read does not.
         //
-        // Which leaves a real divergence, pre-existing and NOT introduced here: Android's keep-alive polls
-        // 0x2A19 for a 5/MG whenever it runs, while this one skips it unless `didBond`. An unbonded 5/MG
-        // therefore gets a periodic battery read on Android and none here. The pack's charge comes from
-        // the pushed pack-info event (109) on both, that flag's only writer since #1945.
+        // #1953 closed that divergence: the unbonded 5/MG battery read now fires from the keep-alive tick
+        // itself (above the `guard didBond` line), on the SAME throttle `enableLiveNotifications` uses, so
+        // an unbonded 5/MG gets a periodic battery read on iOS at the same ~60 s cadence Android does. The
+        // pack's charge comes from the pushed pack-info event (109) on both, that flag's only writer since
+        // #1945.
         //
         // This leaves opcode 151 with NO sender on iOS, which is the state `FrameRouter` already records
         // for its own decoder ("nothing sent the command, so the decoder had no caller"). Android keeps a
@@ -6350,6 +6376,11 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             // genuinely up keeps its notifications either way.
             let isHelloChar = characteristic.uuid == BLEManager.whoop5CmdWriteChar
             let helloOutstanding = clientHelloWriteAt != nil
+            // #1883: compute the elapsed time BEFORE clearing the window, so the timing tell can use it.
+            // The elapsed time is the whole signal Apple has — CoreBluetooth exposes no bond state, so
+            // a completion faster than one connection interval is the one tell that the callback came
+            // from the local stack rather than the strap (#1635).
+            let helloElapsedMs = clientHelloWriteAt.map { Int(Date().timeIntervalSince($0) * 1000) }
             // Consume the window ONLY for the hello's own completion. A foreign completion that cleared it
             // would make a genuine ack arriving afterwards look unsolicited, costing a real bond.
             //
@@ -6384,6 +6415,14 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 noteGenuineBond(of: peripheral)   // #52: this strap bonds fine; clears any pin-refusal streak
                 emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
                 log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
+                // #1883: Apple has no link-encryption state to verify the bond against. A completion
+                // faster than one connection interval did not come from the strap — that is the
+                // signature of #1635's false bond. Log it as UNVERIFIED without changing behavior,
+                // because on Apple there is no alternative source of truth and refusing to bond would
+                // break every strap that genuinely bonds.
+                if let elapsed = helloElapsedMs, let timingLine = ClientHelloOutcome.unverifiedBondTimingLine(elapsedMs: elapsed) {
+                    log(timingLine)
+                }
             }
             for c in whoop5NotifyCharacteristics where !c.isNotifying || restoreNeedsResubscribe {
                 requestNotify(c, on: peripheral, reason: "post-bond puffin")   // #613: force re-arm on restore
