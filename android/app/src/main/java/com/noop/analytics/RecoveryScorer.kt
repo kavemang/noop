@@ -293,7 +293,8 @@ object RecoveryScorer {
      * @param resp tonight's respiration (raw or calibrated — z is scale-invariant);
      *   null drops the term.
      * @param hrvBaseline HRV baseline (required for a score).
-     * @param rhrBaseline resting-HR baseline; null drops the RHR term.
+     * @param rhrBaseline resting-HR baseline; null drops the RHR term. On the BaselineState overload an
+     *   UNUSABLE baseline (#1988) is treated as null, so a synthetic cold-start midpoint never scores.
      * @param respBaseline respiration baseline; null drops the resp term.
      * @param sleepPerf sleep-performance proxy (Rest composite 0..1, or efficiency
      *   0..1 for legacy callers); null drops the term.
@@ -420,7 +421,13 @@ object RecoveryScorer {
         rhr = rhr,
         resp = resp,
         hrvBaseline = DriverBaseline(hrvBaseline),
-        rhrBaseline = rhrBaseline?.let { DriverBaseline(it) },
+        // #1988: an UNUSABLE resting-HR baseline is treated as absent. foldHistory returns the
+        // config's synthetic midpoint (about 75 bpm) for an empty or all-implausible history, which is
+        // nobody's resting HR, so scoring against it moved Charge on a baseline the user never had.
+        // Gated here, in the one place every BaselineState caller passes through, rather than at each
+        // call site: the headline and the driver breakdown then agree by construction. Mirrors how
+        // hrvBaselineUsable is already derived below.
+        rhrBaseline = rhrBaseline?.takeIf { it.usable }?.let { DriverBaseline(it) },
         respBaseline = respBaseline?.let { DriverBaseline(it) },
         sleepPerf = sleepPerf,
         skinTempDev = skinTempDev,
