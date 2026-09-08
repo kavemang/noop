@@ -104,21 +104,28 @@ private fun hypnogramSummary(stages: List<Pair<String, Float>>): String {
 /** Map a list of values into evenly-spaced points within [bounds], scaling y to the
  *  value range. A flat series (min == max) is centered vertically. Returns an empty
  *  list when there are fewer than two finite points. */
-private fun pointsFor(
+internal fun pointsFor(
     values: List<Double>,
     width: Float,
     height: Float,
     topPad: Float,
     bottomPad: Float,
     yDomain: ClosedFloatingPointRange<Double>? = null,
+    timestamps: List<Long>? = null,
 ): List<Offset> {
     val clean = values.filter { it.isFinite() }
     if (clean.size < 2 || width <= 0f || height <= 0f) return emptyList()
     // A supplied domain never HIDES a reading: it widens to contain anything outside it, so anchoring can
     // only ever change the scale, never clip a value off the chart.
     val lo = yDomain?.let { minOf(it.start, clean.min()) } ?: clean.min()
-    val hi = yDomain?.let { maxOf(it.endInclusive, clean.max()) } ?: clean.max()
-    return pointsFor(clean, width, height, topPad, bottomPad, lo, hi)
+    var hi = yDomain?.let { maxOf(it.endInclusive, clean.max()) } ?: clean.max()
+    // A series that is entirely flat AT the supplied floor would otherwise have zero span, and the
+    // zero-span fallback puts a flat line mid-chart. That is right when the scale came from the data
+    // (a steady 70bpm belongs in the middle) and wrong when a floor was asked for: an all-zero Effort
+    // week must sit ON the floor, which is the whole property the floor exists to give. Widening by one
+    // unit puts it there. Only when a domain was supplied, so auto-scaled charts keep their behaviour.
+    if (yDomain != null && hi <= lo) hi = lo + 1.0
+    return pointsFor(clean, width, height, topPad, bottomPad, timestamps, lo, hi)
 }
 
 private fun pointsFor(
@@ -127,6 +134,7 @@ private fun pointsFor(
     height: Float,
     topPad: Float,
     bottomPad: Float,
+    timestamps: List<Long>?,
     minV: Double,
     maxV: Double,
 ): List<Offset> {
@@ -134,10 +142,10 @@ private fun pointsFor(
 
     val span = (maxV - minV)
     val usableH = (height - topPad - bottomPad).coerceAtLeast(1f)
-    val stepX = if (values.size > 1) width / (values.size - 1) else width
+    val fractions = xFractions(values.size, timestamps)
 
     return values.mapIndexed { i, v ->
-        val x = stepX * i
+        val x = fractions[i] * width
         val norm = if (span > 0.0) ((v - minV) / span).toFloat() else 0.5f
         val y = topPad + (1f - norm) * usableH
         Offset(x, y)
@@ -266,6 +274,16 @@ fun LineChart(
      * line at the top, so this is opt-in per metric rather than "percentages get 0..100".
      */
     yDomain: ClosedFloatingPointRange<Double>? = null,
+    /**
+     * Draw a small marker at every reading.
+     *
+     * A line alone cannot say WHERE the measurements are. On a daily trend with missing days that matters:
+     * a long straight run is either a steady week or one reading either side of a gap, and the line looks
+     * identical. Markers say which, without fragmenting the stroke the way breaking it did.
+     *
+     * Opt-in, so the dense live charts (HR at 1 Hz) are untouched, where a dot per sample would be noise.
+     */
+    showsPoints: Boolean = false,
 ) {
     val cleanValues = remember(values) { values.filter { it.isFinite() } }
     // Timestamps filtered by the SAME finiteness cut as cleanValues so indices stay aligned;
@@ -283,14 +301,19 @@ fun LineChart(
         else values.indices.filter { values[it].isFinite() }.map { segmentIds[it] }
     }
     var selectedIndex by remember(cleanValues) { mutableIntStateOf(-1) }
+    // Hoisted, not recomputed per gesture event: the drag handler fires every frame and this allocates a
+    // list the length of the series. Keyed on both inputs so the gesture handlers can be keyed on IT:
+    // keying them on `cleanValues` alone would let a timestamp change leave them hit-testing against
+    // stale positions, highlighting one day while labelling another.
+    val xFracs = remember(cleanValues, cleanTimestamps) { xFractions(cleanValues.size, cleanTimestamps) }
     val interactiveModifier = if (selectionEnabled) {
         Modifier
-            .pointerInput(cleanValues) {
+            .pointerInput(cleanValues, xFracs) {
                 detectTapGestures(
                     onTap = { offset ->
                         if (cleanValues.size >= 2 && size.width > 0) {
                             selectedIndex = nearestIndexForX(
-                                count = cleanValues.size,
+                                fractions = xFracs,
                                 width = size.width.toFloat(),
                                 x = offset.x,
                             )
@@ -300,12 +323,12 @@ fun LineChart(
             }
             .then(
                 if (dragSelectionEnabled) {
-                    Modifier.pointerInput(cleanValues) {
+                    Modifier.pointerInput(cleanValues, xFracs) {
                         detectHorizontalDragGestures(
                             onDragStart = { start ->
                                 if (cleanValues.size < 2 || size.width <= 0f) return@detectHorizontalDragGestures
                                 selectedIndex = nearestIndexForX(
-                                    count = cleanValues.size,
+                                    fractions = xFracs,
                                     width = size.width.toFloat(),
                                     x = start.x,
                                 )
@@ -313,7 +336,7 @@ fun LineChart(
                             onHorizontalDrag = { change, _ ->
                                 if (cleanValues.size < 2 || size.width <= 0f) return@detectHorizontalDragGestures
                                 selectedIndex = nearestIndexForX(
-                                    count = cleanValues.size,
+                                    fractions = xFracs,
                                     width = size.width.toFloat(),
                                     x = change.position.x,
                                 )
@@ -369,7 +392,7 @@ fun LineChart(
                     val strokePx = 2.5f
                     val topPad = strokePx + 4f
                     val bottomPad = strokePx + 4f
-                    val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad, yDomain)
+                    val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad, yDomain, cleanTimestamps)
                     if (pts.isEmpty()) {
                         onDrawBehind { drawBaseline() }
                     } else {
@@ -412,18 +435,13 @@ fun LineChart(
                             }
                             // The line itself.
                             for (path in linePaths) drawPath(path = path, color = color, style = lineStroke)
-                            // A segment of ONE point strokes nothing: a Path with a moveTo and no lineTo
-                            // draws no pixels. Without this the reading is silently invisible while the
-                            // stats row still counts it, which is exactly what breaking the line on a
-                            // missing day creates: an isolated day between two gaps. On the reported
-                            // Effort series that day was 5 Sep, the fortnight's MAXIMUM.
-                            for (range in segments) {
-                                if (range.first != range.last) continue
-                                drawCircle(
-                                    color = color,
-                                    radius = strokePx * 1.4f,
-                                    center = pts[range.first],
-                                )
+                            // Markers only while they can still be told apart. On the ALL range a daily
+                            // series is hundreds of points, and a dot every few pixels merges into a
+                            // thick smear that hides the line it was meant to annotate.
+                            val markerRadius = strokePx * 1.2f
+                            val spacing = if (pts.size > 1) size.width / (pts.size - 1) else size.width
+                            if (showsPoints && spacing >= markerRadius * 3f) {
+                                for (p in pts) drawCircle(color = color, radius = markerRadius, center = p)
                             }
                             // A one-reading segment has no visible stroke. Method-segmented trends retain
                             // a small point so neither side of a method transition disappears.
@@ -441,7 +459,7 @@ fun LineChart(
                         val strokePx = 2.5f
                         val topPad = strokePx + 4f
                         val bottomPad = strokePx + 4f
-                        val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad, yDomain)
+                        val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad, yDomain, cleanTimestamps)
                         if (selectedIndex in pts.indices) {
                             val p = pts[selectedIndex]
                             drawLine(
@@ -507,7 +525,9 @@ fun MultiLineChart(
         val bottomPad = strokePx + 4f
 
         cleanSeries.forEach { line ->
-            val pts = pointsFor(line.values, size.width, size.height, topPad, bottomPad, minV, maxV)
+            // MultiLineChart keeps index spacing: its series are index-aligned to each other, not to a
+            // shared clock, so positioning by time would need a per-series timeline it does not have.
+            val pts = pointsFor(line.values, size.width, size.height, topPad, bottomPad, null, minV, maxV)
             if (pts.isEmpty()) return@forEach
             val path = Path().apply {
                 moveTo(pts.first().x, pts.first().y)
@@ -522,12 +542,42 @@ fun MultiLineChart(
     }
 }
 
-private fun nearestIndexForX(count: Int, width: Float, x: Float): Int {
-    if (count <= 1 || width <= 0f) return 0
-    val step = width / (count - 1)
+/**
+ * Where each point sits horizontally, as a 0..1 fraction of the width.
+ *
+ * Index spacing puts every reading an equal step apart, so a four-day gap is drawn exactly like a one-day
+ * step. With per-point timestamps the position is proportional to TIME instead, which is what makes a gap
+ * occupy the width it actually spans, and what makes breaking the stroke across one read as "nothing
+ * measured here" rather than as a chopped line.
+ *
+ * Falls back to index spacing whenever time cannot order the points: no timestamps, a length mismatch, a
+ * zero span (every reading at the same instant), or a non-ascending sequence. Refusing rather than
+ * guessing, the same stance the rest of this file takes.
+ */
+internal fun xFractions(count: Int, timestamps: List<Long>?): List<Float> {
+    if (count <= 1) return List(count) { 0f }
+    val indexFractions = { List(count) { it.toFloat() / (count - 1) } }
+    if (timestamps == null || timestamps.size != count) return indexFractions()
+    if (timestamps.zipWithNext().any { (a, b) -> b < a }) return indexFractions()
+    val span = (timestamps.last() - timestamps.first()).toDouble()
+    if (span <= 0.0) return indexFractions()
+    return timestamps.map { ((it - timestamps.first()) / span).toFloat() }
+}
+
+/**
+ * The nearest point to a tapped x. Takes the SAME fractions the geometry used: deriving it from a uniform
+ * step independently would select the wrong reading the moment spacing stopped being uniform.
+ */
+private fun nearestIndexForX(fractions: List<Float>, width: Float, x: Float): Int {
+    if (fractions.size <= 1 || width <= 0f) return 0
     val clampedX = x.coerceIn(0f, width)
-    val raw = (clampedX / step).roundToInt()
-    return raw.coerceIn(0, count - 1)
+    var best = 0
+    var bestDist = Float.MAX_VALUE
+    fractions.forEachIndexed { i, f ->
+        val d = kotlin.math.abs(f * width - clampedX)
+        if (d < bestDist) { bestDist = d; best = i }
+    }
+    return best
 }
 
 /** The tap/drag pinpoint label: the caller's display formatter when supplied (#463), else the raw

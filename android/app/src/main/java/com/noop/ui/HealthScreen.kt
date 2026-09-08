@@ -2101,6 +2101,10 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     // two are equal in length by construction rather than by luck — `LineChart` drops
                     // mismatched labels SILENTLY, which is a failure that looks exactly like doing nothing.
                     selectionLabels = dayLabels,
+                    // Position by DATE, not by reading index: a four-day gap now occupies four days of
+                    // width, which is what makes the break across it read as "nothing measured here"
+                    // rather than as a chopped line. Days that do not parse fall back to index spacing.
+                    timestamps = dayEpochSeconds(filteredReadings),
                     // #1662: the metric's OWN formatter AND unit — byte-for-byte what the Min/Avg/Max
                     // row below renders. Without it the scrub read-out falls back to LineChart's
                     // default, which prints a decimal for any non-integer, so a rounded metric answered
@@ -2108,15 +2112,17 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     formatValue = { "${detail.format(it)} ${detail.unit}".trim() },
                     // VO2max breaks on an estimator change; every other metric breaks on a missing day,
                     // so the line stops asserting a value for days that were never measured.
-                    segmentIds = when {
-                        key == "vo2max_est" -> vo2MaxTrendSegmentIds(filteredReadings)
-                        vitalIsDailyCadence(key) -> dailyGapSegmentIds(filteredReadings)
-                        // Sparse by design: every point would be isolated and the line would vanish.
-                        else -> null
-                    },
+                    // Only VO2max breaks, on an estimator change. Breaking on a missing DAY was tried and
+                    // removed: with points positioned by date a gap already shows as a longer run between
+                    // two readings, and breaking as well fragmented the line into pieces with the odd
+                    // orphan dot, which reads as a rendering fault rather than as missing data.
+                    segmentIds = if (key == "vo2max_est") vo2MaxTrendSegmentIds(filteredReadings) else null,
                     // Anchor the metrics whose natural range IS their interesting range, so a calm one
                     // stops being drawn as violently as a wild one.
                     yDomain = vitalChartYDomain(key),
+                    // A daily trend has few enough readings for a marker each, and they are what say where
+                    // the measurements actually are once gaps stretch the line between them.
+                    showsPoints = true,
                 )
                 // #1662: the VO2max line is SPLIT on purpose wherever the estimator changes, so two
                 // non-adjacent Nes runs are never joined across an incompatible Uth stretch. Nothing said
