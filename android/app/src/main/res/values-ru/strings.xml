@@ -2242,6 +2242,7 @@
     <string name="today_action_how_charge">Как рассчитывается Заряд</string>
     <string name="today_action_reset_hr_zoom">Сбросить масштаб пульса</string>
     <string name="today_action_see_what_shaped">Посмотреть, что сформировало ваш показатель %1$s</string>
+    <string name="today_action_open_detail">Открыть подробности: %1$s</string>
     <string name="today_action_show_sources">Показать, откуда синхронизируется NOOP</string>
     <string name="today_action_show_workout">Показать детали тренировки</string>
     <string name="today_contributors">Участники</string>
@@ -2625,4 +2626,6 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Обновлено %1$s</string>
     <string name="widget_hr_name">NOOP Пульс</string>
     <string name="widget_hr_description">Пульс в реальном времени и график за последние три часа.</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">Посмотреть динамику Заряда</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">Оценка за каждый день во времени.</string>
 </resources>

@@ -86,6 +86,16 @@ final class Backfiller {
     private let log: ((String) -> Void)?
     /// Versions already reported this session, so the diagnostic logs each once (no spam).
     private var loggedUnmappedVersions: Set<Int> = []
+    /// #1992: reject frames still allowed to hex-dump (see `hexDumpAllowance`).
+    ///
+    /// Deliberately NOT reset in `begin()`, for the same reason as `lastAckedTrim`: the thing being
+    /// protected is the ROLLING LOG, which belongs to the process, not to one offload session. The
+    /// auto-continue re-kicks up to 24 sessions per connection, so a per-session budget would allow
+    /// 24 x 24 frames and flood the buffer exactly as before, which is the shape the reporter hit.
+    private(set) var rejectHexBudget = Backfiller.rejectHexDumpBudget
+    /// Reject frames seen this session, so the suppression line can say what it stopped showing.
+    private var rejectFramesSeen = 0
+    private var rejectHexSuppressedNoted = false
 
     /// Per-session persistence tally — the success-side observability the log forensics flagged as the
     /// blind spot (#150): we logged FAILURES (decoded-to-0) but never SUCCESSES, so a strap log couldn't
@@ -183,6 +193,44 @@ final class Backfiller {
     /// `begin()` (it's a cross-session high-water mark, not a per-session tally).
     private(set) var lastAckedTrim: UInt32?
 
+    /// Reject frames one connection may hex-dump (#1992). Three chunks worth at the per-chunk cap:
+    /// enough distinct records to triangulate field offsets (v25 was mapped from 45, spread over many
+    /// logs), while leaving room in a 2000-line rolling buffer for the lines that give the dump context.
+    /// The complete records are always in the reject archive.
+    static let rejectHexDumpBudget = 24
+
+    /// #891: the dump line for the first frame of an unmapped packet type, or nil when this chunk holds
+    /// no frame of that type.
+    ///
+    /// Pure and static so the SELECTION is pinnable: the census names a type, and this has to find the
+    /// bytes that earned the name. Byte-identical to the Android line, which sources its hex from
+    /// `StreamBatch.unhandledPacketSamples` because the Kotlin extractor is handed raw ByteArrays and can
+    /// sample in place. Swift's extractor only sees `ParsedFrame`s whose `rawHex` is empty on the ingest
+    /// fast path (`collectFields: false`, D#969), so the bytes have to be zipped back in here.
+    /// Takes `typeNames` rather than the `ParsedFrame`s they came from: the selection only needs the
+    /// name, and `ParsedFrame`'s memberwise init is internal to WhoopProtocol, so a StrandTests case
+    /// cannot build one. A helper that cannot be called from its own test is not a testable helper.
+    static func unmappedTypeDumpLine(typeName: String, frames: [[UInt8]],
+                                     typeNames: [String]) -> String? {
+        guard let raw = zip(frames, typeNames).first(where: { $0.1 == typeName })?.0 else { return nil }
+        let hex = raw.map { String(format: "%02x", $0) }.joined()
+        return "Backfill: unmapped type \(typeName) first frame \(raw.count)B: \(hex)"
+    }
+
+    /// How many reject frames this chunk may hex-dump, given what the session has already spent (#1992).
+    ///
+    /// The dump is the only channel carrying an unmapped layout's raw bytes to someone who can map it,
+    /// and it was bounded PER CHUNK with no session budget. On the straps it exists for that defeats
+    /// itself: a strap rejecting ~25 records per chunk, across many chunks and many sessions per
+    /// connection, emits 8 long hex lines each time, floods the 2000-line rolling log, and evicts its own
+    /// earlier dumps along with the context needed to read them.
+    ///
+    /// Pure, so the arithmetic is testable without a Backfiller. Kotlin twin: `hexDumpAllowance`.
+    static func hexDumpAllowance(_ rejectedCount: Int, _ budgetRemaining: Int,
+                                 perChunkCap: Int = 8) -> Int {
+        max(0, min(rejectedCount, perChunkCap, budgetRemaining))
+    }
+
     /// Distinct historical layout versions logged this session. Unlike `loggedUnmappedVersions` (which
     /// only fires for layouts NOOP can't decode), this surfaces the layout on a HEALTHY sync too, so a
     /// shared strap log always reveals what the strap emits (v18/v24/v25/v26). Mirrors the Android
@@ -192,6 +240,15 @@ final class Backfiller {
     /// SpO2 RE dump (PR #945, reimplemented): how many full-record dumps this session emitted, bounded by
     /// `Spo2ReTrace.maxSamples`. Session-scoped so the cap spans chunks; reset per session in `begin`.
     private var spo2Dumped = 0
+
+    /// SpO2 RE dump: how many records this session dumped for each layout version, so one layout cannot
+    /// spend the whole session budget. Key -1 buckets a record whose `hist_version` did not decode.
+    /// Session-scoped alongside `spo2Dumped`; reset in `begin`. Twin of the Android `spo2DumpedByVersion`.
+    private var spo2DumpedByVersion: [Int: Int] = [:]
+
+    /// SpO2 RE dump: records EXAMINED this session, bounded by `Spo2ReTrace.maxExamined`. Applied here so
+    /// both platforms examine the same frames and dump the same records. Twin of Android `spo2Examined`.
+    private var spo2Examined = 0
 
     /// Durably archives undecodable record frames BEFORE the trim ack (#77 / #91). Returns true once
     /// the bytes are safe (written OR cap-reached — either way the chunk may be acked) and false on a
@@ -290,6 +347,8 @@ final class Backfiller {
         sessionDynAccel = Streams.DynAccelDiag()
         loggedLayoutVersions.removeAll(keepingCapacity: true)
         spo2Dumped = 0
+        spo2DumpedByVersion = [:]
+        spo2Examined = 0
         // #547: the range markers belong to a connection's GET_DATA_RANGE, which BLEManager re-sets per
         // connect; clear them here so a fresh session never reuses a previous strap's window. BLEManager
         // re-publishes them as soon as the range reply arrives.
@@ -611,9 +670,17 @@ final class Backfiller {
             // frames carry no record bytes to correlate. Records dump whether or not they carry SpO2
             // channels, so "nothing banked" is provable too. Never a user-facing number (never-fabricate;
             // the #194 lesson). Twin of the Android Backfiller emit.
-            if spo2Dumped < Spo2ReTrace.maxSamples, connectionActive(), let connectionLog {
+            if spo2Dumped < Spo2ReTrace.maxSamples, spo2Examined < Spo2ReTrace.maxExamined,
+               connectionActive(), let connectionLog {
                 for (raw, p) in zip(frames, parsed) where spo2Dumped < Spo2ReTrace.maxSamples {
+                    if spo2Examined >= Spo2ReTrace.maxExamined { break }
+                    spo2Examined += 1
                     guard let unix = p.parsed["unix"]?.intValue else { continue }
+                    // Stratify by layout: without this the first chunk's dominant layout eats the whole
+                    // budget and the rare, still-unmapped one never gets a frame. See `maxPerVersion`.
+                    let ver = p.parsed["hist_version"]?.intValue ?? -1
+                    let dumpedForVer = spo2DumpedByVersion[ver] ?? 0
+                    if dumpedForVer >= Spo2ReTrace.maxPerVersion { continue }
                     connectionLog(Spo2ReTrace.recordLine(
                         frame: raw,
                         version: p.parsed["hist_version"]?.intValue,
@@ -621,6 +688,7 @@ final class Backfiller {
                         red: p.parsed["spo2_red"]?.intValue,
                         ir: p.parsed["spo2_ir"]?.intValue,
                         skinRaw: p.parsed["skin_temp_raw"]?.intValue))
+                    spo2DumpedByVersion[ver] = dumpedForVer + 1
                     spo2Dumped += 1
                 }
             }
@@ -684,6 +752,21 @@ final class Backfiller {
                          "decoder has no rows for — they are being dropped. If \(typeName) is not a name " +
                          "you recognise, this is a firmware record type NOOP has never mapped: please " +
                          "report it on #891 with the strap model and firmware build.")
+                    // #891: and the bytes, so the report is actionable. Without this the line above asks a
+                    // reporter to raise an issue about a record that exists nowhere else: `default:` drops
+                    // the frame and the reject archive only ever holds type-47. First sighting only, so a
+                    // long offload of one unmapped type still costs exactly one dump.
+                    //
+                    // Taken HERE rather than in the extractor, which is where the Android twin collects it:
+                    // `extractHistoricalStreams` receives already-parsed frames, and `ParsedFrame.rawHex` is
+                    // deliberately empty on the ingest fast path (`collectFields: false`, D#969), so reading
+                    // it there would emit an empty dump on every real offload while passing any test that
+                    // builds its own ParsedFrame. The raw bytes only exist at this level. Same log line on
+                    // both platforms; no prefix cap, for the reason the reject dump has none.
+                    if let line = Backfiller.unmappedTypeDumpLine(typeName: typeName, frames: frames,
+                                                                  typeNames: parsed.map(\.typeName)) {
+                        log?(line)
+                    }
                 }
             }
             // Diagnostic (#77): the AGGREGATE silent-loss case — frames arrived but produced no rows at
@@ -714,7 +797,9 @@ final class Backfiller {
                 // prefix — v25/v26 records run ~84 B and the truncated tail is exactly where the
                 // unmapped motion/HR fields sit), and sample a few more so one log carries enough
                 // records to triangulate offsets. These only ever fire for unmapped firmware.
-                let sample = Array(rejected.prefix(8))
+                rejectFramesSeen += rejected.count
+                // #1992: spend from a SESSION budget, not a fresh 8 per chunk. See `hexDumpAllowance`.
+                let sample = Array(rejected.prefix(Backfiller.hexDumpAllowance(rejected.count, rejectHexBudget)))
                 var emptySkipped = 0
                 for (i, f) in sample.enumerated() {
                     // #1007: an all-zero frame has no record layout to map, so its hex dump is pure log
@@ -722,9 +807,18 @@ final class Backfiller {
                     if isEmptyRecordFrame(f) { emptySkipped += 1; continue }
                     let hex = f.map { String(format: "%02x", $0) }.joined()
                     log?("Backfill: rejected frame[\(i)] \(f.count)B: \(hex)")
+                    rejectHexBudget -= 1
                 }
                 if emptySkipped > 0 {
                     log?("Backfill: #1007 \(emptySkipped)/\(sample.count) sampled frame(s) all-zero (empty payload) - hex dump skipped")
+                }
+                // Say ONCE that the sample is capped, so a reader knows the dump is a sample rather than
+                // everything the strap sent, and where the rest lives.
+                if rejectHexBudget <= 0, !rejectHexSuppressedNoted {
+                    rejectHexSuppressedNoted = true
+                    log?("Backfill: hex dumps capped at \(Backfiller.rejectHexDumpBudget) frame(s) while this connection lasts "
+                         + "(\(rejectFramesSeen) reject frame(s) seen so far); the complete records are in the "
+                         + "reject archive. Sample is enough to map a layout (#1992)")
                 }
             }
             // Commit the decoded rows FIRST (durable). Doing this before the reject archive means a

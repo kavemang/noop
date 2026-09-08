@@ -2312,6 +2312,7 @@
     <string name="today_action_how_charge">So wird Energie berechnet</string>
     <string name="today_action_reset_hr_zoom">Herzfrequenz-Zoom zurücksetzen</string>
     <string name="today_action_see_what_shaped">Einflüsse auf %1$s anzeigen</string>
+    <string name="today_action_open_detail">%1$s-Details öffnen</string>
     <string name="today_action_show_sources">Synchronisierte NOOP-Quellen anzeigen</string>
     <string name="today_action_show_workout">Workout-Details anzeigen</string>
     <string name="today_contributors">Einflussfaktoren</string>
@@ -2755,4 +2756,6 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Aktualisiert %1$s</string>
     <string name="widget_hr_name">NOOP Herzfrequenz</string>
     <string name="widget_hr_description">Live-Herzfrequenz mit den letzten drei Stunden als Verlauf.</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">Ladungs-Trend ansehen</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">Jeder Tageswert im Zeitverlauf.</string>
 </resources>

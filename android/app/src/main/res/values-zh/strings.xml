@@ -2222,6 +2222,7 @@
     <string name="today_action_how_charge">了解能量的计算方式</string>
     <string name="today_action_reset_hr_zoom">重置心率缩放</string>
     <string name="today_action_see_what_shaped">查看影响 %1$s 的因素</string>
+    <string name="today_action_open_detail">打开%1$s详情</string>
     <string name="today_action_show_sources">查看 NOOP 同步的数据源</string>
     <string name="today_action_show_workout">查看锻炼详情</string>
     <string name="today_contributors">影响因素</string>
@@ -2655,4 +2656,6 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">更新于 %1$s</string>
     <string name="widget_hr_name">NOOP 心率</string>
     <string name="widget_hr_description">实时心率，并显示最近三小时的曲线。</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">查看充能趋势</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">每天的分数，随时间变化。</string>
 </resources>

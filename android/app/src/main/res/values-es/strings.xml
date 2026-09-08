@@ -2299,6 +2299,7 @@
     <string name="today_action_how_charge">Cómo se calcula la carga</string>
     <string name="today_action_reset_hr_zoom">Restablecer zoom de frecuencia cardíaca</string>
     <string name="today_action_see_what_shaped">Ver qué influyó en %1$s</string>
+    <string name="today_action_open_detail">Abrir el detalle de %1$s</string>
     <string name="today_action_show_sources">Mostrar las fuentes sincronizadas con NOOP</string>
     <string name="today_action_show_workout">Mostrar los detalles del entrenamiento</string>
     <string name="today_contributors">Factores</string>
@@ -2742,4 +2743,6 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Actualizado %1$s</string>
     <string name="widget_hr_name">NOOP Frecuencia cardíaca</string>
     <string name="widget_hr_description">Frecuencia cardíaca en directo con las últimas tres horas como gráfico.</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">Ver la tendencia de Carga</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">La puntuación de cada día, a lo largo del tiempo.</string>
 </resources>
