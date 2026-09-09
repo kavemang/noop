@@ -64,6 +64,18 @@ final class IntelligenceEngine: ObservableObject {
     /// never crosses `.noopbak`. The engine is a single long-lived instance (AppModel), so this survives the
     /// storm's back-to-back passes the drain is made of. See `AnalyzeRecentDayCache` (StrandAnalytics).
     private var dayScanCache: [String: (key: String, scan: DayScan)] = [:]
+    /// UserDefaults key holding the persisted `stepsMotionCache` payload. Versioned in the key as well as
+    /// in the payload header so a format change cannot even be read, let alone half-parsed.
+    private static let stepsMotionCacheDefaultsKey = "analyzeRecent.stepsMotionCache.v1"
+    /// Whether this process has already seeded `stepsMotionCache` from `stepsMotionCacheDefaultsKey`. The
+    /// read happens once per process, not once per pass: after the first pass the in-memory cache is at
+    /// least as fresh as the payload, so re-reading it could only ever put back what we just pruned.
+    private var stepsMotionCacheLoaded = false
+    /// The payload currently in UserDefaults, so an unchanged cache does not rewrite it. A pass that reused
+    /// every day renders the string it read, and the passes that do so are the back-to-back ones an offload
+    /// storm is made of — writing ~4 KB on each of them to store what is already there is the cost this
+    /// avoids. Not an assumption about what the store does with an identical value: it simply is not asked.
+    private var stepsMotionCachePersisted = ""
     /// Per-day steps-calibration motion folds, `[day: (key, motion)]`, keyed by `StepsMotionCache.cacheKey`.
     /// In-memory and per-process exactly like `dayScanCache`; see `StepsMotionCache` for why this one needs
     /// no config signature. Pruned to the calibration window each pass so it cannot grow without bound.
@@ -842,6 +854,10 @@ final class IntelligenceEngine: ObservableObject {
         let effortMethodGlobal = PuffinExperiment.effortMethod
         let dayCycleMode = DayCycleMode.persisted(UserDefaults.standard.string(forKey: DayCycleMode.storageKey))
 
+        // Zero the per-day probe counters so the line emitted after the steps phase describes THIS pass
+        // and never accumulates across the back-to-back passes an offload storm is made of. Must precede
+        // the day loop below, which is the scoring half of the owner probes. See `StoreProbeTally`.
+        _ = await store.takeProbeCounts()
         // ── #1005 BATTERY: per-day reuse cache setup (see `dayScanCache`) ────────────────────────────
         // The stager toggles are read per-day inside the loop below, but they are global (same value every
         // day); read them ONCE here too so the config signature can fold them without reaching into the
@@ -2374,6 +2390,19 @@ final class IntelligenceEngine: ObservableObject {
         // `deviceId` (a MainActor instance `let`) to a local Sendable `String` so the @Sendable detached
         // closure captures the VALUE, never `self`, exactly as FIX 1's `ownerFallbackId`.
         let stepsFallbackId = deviceId
+        // Seed the fold cache from storage on the first pass of the process. Without this the sixty-day
+        // fold is re-paid in full after every relaunch — the cache's whole win is a repeat, and a relaunch
+        // is a repeat the process boundary hid. Nothing pass-global feeds the fold, so a payload written by
+        // a previous launch is as good as one written by the previous pass; see `StepsMotionCache`.
+        if !stepsMotionCacheLoaded {
+            stepsMotionCacheLoaded = true
+            if let raw = UserDefaults.standard.string(forKey: Self.stepsMotionCacheDefaultsKey) {
+                stepsMotionCache = StepsMotionCache.deserialize(raw)
+                // Seed the write guard with what is actually stored. A payload this build renders identically
+                // then costs no write at all; one carrying a line we dropped is rewritten clean on this pass.
+                stepsMotionCachePersisted = raw
+            }
+        }
         let inStepsMotionCache = stepsMotionCache
         let (refStepsByDay, motionByDay, updatedStepsMotionCache, stepsMotionLogLine):
             ([String: Double], [String: Double], [String: (key: String, motion: Double)], String) =
@@ -2444,7 +2473,21 @@ final class IntelligenceEngine: ObservableObject {
             return (refSteps, motion, motionCacheLocal, motionLog)
         }.value
         stepsMotionCache = updatedStepsMotionCache
+        // Write the pruned cache back, only when it moved. `serialize` renders sorted, so a pass that reused
+        // every day produces the string already stored and skips the write entirely.
+        let stepsMotionPayload = StepsMotionCache.serialize(stepsMotionCache)
+        if stepsMotionPayload != stepsMotionCachePersisted {
+            stepsMotionCachePersisted = stepsMotionPayload
+            UserDefaults.standard.set(stepsMotionPayload, forKey: Self.stepsMotionCacheDefaultsKey)
+        }
         diagnosticSink?(stepsMotionLogLine, nil)
+        // What the pass spent on its per-day probe queries, beside the `stepsMotion reused=N/M` line above.
+        // Together they say whether a warm pass that folded nothing still went into the round trips.
+        let probeCounts = await store.takeProbeCounts()
+        diagnosticSink?(StoreProbeTally.logLine([
+            (name: "ownerHr", calls: probeCounts.ownerHr.calls, seconds: probeCounts.ownerHr.seconds),
+            (name: "gravityFp", calls: probeCounts.gravityFp.calls, seconds: probeCounts.gravityFp.seconds),
+        ]), nil)
         // #1816: persist whether the strap has banked ANY motion in the calibration scan window, so the
         // Today tile can distinguish "Need N more phone-step days" (motion exists, phone half missing)
         // from "No motion synced yet" (the motion half is the blocker, and no number of phone-step days
@@ -2748,23 +2791,42 @@ final class IntelligenceEngine: ObservableObject {
             return fallbackDeviceId
         }
 
-        var candidates: [DayOwnerResolver.Candidate] = []
-        for d in liveDevices {
+        // Probe in PRIORITY ORDER and stop at the first candidate that has data.
+        //
+        // `DayOwnerResolver.resolve` is `candidates.filter(hasData).min(by: priority)`, so the winner is
+        // the lowest-priority-number candidate with data, and every probe after it cannot change the
+        // answer. Probing them anyway cost a query per candidate per day: on the 60-day steps window with
+        // two straps that is 120 per pass, and the active strap usually answers on the first.
+        // `DayOwnerResolverEquivalenceTests` pins this against the resolver itself rather than trusting
+        // the reasoning, because the two must not be allowed to drift.
+        //
+        // The probe is a scalar EXISTS now, not a fetched `LIMIT 1` row: the question is one bit, and it
+        // used to be answered by materialising a row and an `HRSample` to test an array for emptiness.
+        //
+        // #137: an activity-file ride ranks BELOW whole-day imports (priority 3 vs 2), so a full-day
+        // WHOOP CSV/cloud import keeps ownership of a day it has HR for; the ride only wins a day that
+        // nothing else covers (a strap-less day). Kotlin RegistryDayOwnerSource mirrors this ordering.
+        let ranked: [(id: String, priority: Int)] = liveDevices.map { d in
             let isImport = d.sourceKind == .cloudImport || d.sourceKind == .fileImport
-            // #137: an activity-file ride ranks BELOW whole-day imports (priority 3 vs 2), so a full-day
-            // WHOOP CSV/cloud import keeps ownership of a day it has HR for; the ride only wins a day that
-            // nothing else covers (a strap-less day). Kotlin RegistryDayOwnerSource mirrors this ordering.
             let priority: Int
             if d.id == activeId { priority = 0 }
             else if d.sourceKind == .activityFile { priority = 3 }
             else if isImport { priority = 2 }
             else { priority = 1 }
-            // Cheap presence check: a single HR row for this device in the night window is enough to
-            // mark it a candidate. (LIMIT 1 , not the full pull the caller does once an owner is chosen.)
-            let hasData = !((try? await store.hrSamples(deviceId: d.id, from: from, to: to, limit: 1)) ?? []).isEmpty
-            candidates.append(DayOwnerResolver.Candidate(deviceId: d.id, priority: priority, hasData: hasData))
+            return (d.id, priority)
         }
-        return DayOwnerResolver.resolve(day: day, lockedOwner: nil, candidates: candidates) ?? fallbackDeviceId
+        // Sorted on (priority, ORIGINAL INDEX), not priority alone. Swift's `sorted` is not a stable sort
+        // by contract, so two candidates sharing a priority — which two non-active straps do, both being
+        // priority 1 — could come back in either order and the first-with-data probe would then pick
+        // either one. Kotlin's `sortedBy` is stable and its resolver's `minByOrNull` takes the first
+        // minimum, so leaving this to the sort would let the platforms disagree on a tie. Carrying the
+        // index makes the order total and matches Kotlin exactly.
+        .enumerated().sorted { ($0.element.priority, $0.offset) < ($1.element.priority, $1.offset) }
+        .map(\.element)
+        for c in ranked {
+            if (try? await store.hasHrInWindow(deviceId: c.id, from: from, to: to)) == true { return c.id }
+        }
+        return fallbackDeviceId
     }
 
     /// The strap family that wrote `owner`'s skin-temp rows (#938), so the nightly funnel converts the raw

@@ -312,7 +312,14 @@ data class PpgHrRow(val ts: Long, val bpm: Int, val conf: Double)
  * unix second, [samples] the raw i16 ADC counts (usually 24, fewer on a truncated frame). deviceId is
  * attached on insert; the samples are packed to a little-endian i16 BLOB by [StreamPersistence.packPpgSamples].
  */
-data class PpgWaveformRow(val ts: Long, val samples: List<Int>, val burstIndex: Int? = null)
+data class PpgWaveformRow(
+    val ts: Long,
+    val samples: List<Int>,
+    val burstIndex: Int? = null,
+    /** #2019: the absolute optical code [samples] are deltas from; null on a legacy row, whose absolute
+     *  level is gone for good because a delta series cannot be inverted without it. */
+    val baseCode: Long? = null,
+)
 
 /** Count of rows ACTUALLY inserted per stream (mirrors WhoopStore.insert return tuple). */
 data class InsertCounts(
@@ -612,7 +619,7 @@ class WhoopRepository(
             dao.insertPpgWaveform(
                 streams.ppgWaveform.map {
                     PpgWaveformSampleEntity(deviceId, it.ts, StreamPersistence.packPpgSamples(it.samples),
-                        it.burstIndex)
+                        it.burstIndex, it.baseCode)
                 },
             )
             // #1911 rolling retention, amortised and best-effort on exactly the same terms as the v18-aux
@@ -696,11 +703,28 @@ class WhoopRepository(
     suspend fun hrFingerprintWindow(deviceId: String, from: Long, to: Long): Pair<Int, Long> =
         Pair(dao.countHrInWindow(deviceId, from, to), dao.maxHrTsInWindow(deviceId, from, to))
 
+    /** Whether [deviceId] has ANY heart-rate row in the window, as a scalar EXISTS rather than a fetched
+     *  row. The day-owner resolver's per-candidate-per-day probe; see [WhoopDao.hasHrInWindow]. */
+    suspend fun hasHrInWindow(deviceId: String, from: Long, to: Long): Boolean {
+        // Timed HERE rather than at the call site: the steps loop that drives most of these sits inside
+        // `analyzeRecentOnCpu`, which has 210 bytes of JaCoCo ratchet margin and no room for a stopwatch.
+        // See StoreProbeTally. Instrumentation only.
+        val started = System.nanoTime()
+        val present = dao.hasHrInWindow(deviceId, from, to)
+        com.noop.analytics.StoreProbeTally.recordOwnerHr(System.nanoTime() - started)
+        return present
+    }
+
     /** Per-day (device + window) gravity fingerprint as (count, newestTs) for the steps-calibration
      *  motion cache. Narrower than [dayStreamFingerprint] on purpose: dayMotionIntensity folds gravity
      *  alone, so a new HR row must not invalidate it. Mirrors Swift WhoopStore.gravityFingerprint. */
-    suspend fun gravityFingerprintWindow(deviceId: String, from: Long, to: Long): Pair<Int, Long> =
-        dao.gravityWitnessInWindow(deviceId, from, to).let { it.c to it.m }
+    suspend fun gravityFingerprintWindow(deviceId: String, from: Long, to: Long): Pair<Int, Long> {
+        // Timed here for the same budget reason as [hasHrInWindow]; see StoreProbeTally.
+        val started = System.nanoTime()
+        val witness = dao.gravityWitnessInWindow(deviceId, from, to)
+        com.noop.analytics.StoreProbeTally.recordGravityFp(System.nanoTime() - started)
+        return witness.c to witness.m
+    }
 
     /** #29 — the same per-day (device + window) witness for every OTHER stream analyzeDay scores: PPG-derived
      *  HR, R-R, respiration, SpO2, gravity, steps, skin temp and events. [hrFingerprintWindow] cannot see a

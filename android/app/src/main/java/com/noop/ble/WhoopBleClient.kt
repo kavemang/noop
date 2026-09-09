@@ -3202,6 +3202,12 @@ class WhoopBleClient(
                             profileStore.stepsCalibrationConfidence = cal.confidence
                             profileStore.stepsCalibrationManual = cal.manual
                         },
+                        // Persisted steps-calibration motion folds. The analytics layer is Context-free, so
+                        // the payload is read and written here; without it the sixty-day fold is re-paid in
+                        // full after every relaunch. A derived cache — a missing or unreadable payload just
+                        // re-folds (see StepsMotionCache).
+                        stepsMotionCacheGet = { NoopPrefs.stepsMotionCache(context) },
+                        stepsMotionCacheSet = { NoopPrefs.setStepsMotionCache(context, it) },
                         // Manual "Recalibrate baseline" anchor (noop.hrvBaselineEpoch, whole seconds in a
                         // Long). The analytics layer is Context-free, so read it here and thread it down so
                         // the post-backfill scoring pass honours the recalibration too — not just the UI's
@@ -10448,6 +10454,13 @@ class WhoopBleClient(
             // #1008/#1118: the pre-storage R-R census for this offload, next to the persisted tally so one
             // line pair says what the decoder OFFERED and what the store KEPT. Twin of the Swift emit.
             backfiller.sessionRrEmissionLine()?.let { rrLine -> log(rrLine) }
+            // #2019: and the v26 optical census, in the same place, so one block says what the offload
+            // banked AND whether those optical windows can be reconstructed at all.
+            com.noop.protocol.ppgWaveformCensusLine(
+                backfiller.sessionPpgWindows, backfiller.sessionPpgWithBase,
+                backfiller.sessionPpgSaturated, backfiller.sessionPpgBaseMin,
+                backfiller.sessionPpgBaseMax,
+            )?.let { ppgLine -> log(ppgLine) }
             // #990: fold this session's drained rows into the persisted ALL-TIME tally at the single
             // summary emit point, so the Connection readout can show install-lifetime progress beside
             // the per-session count (which resets on every reconnect). Unconditional, like the summary
