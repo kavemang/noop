@@ -2086,21 +2086,36 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                         color = Palette.textTertiary,
                     )
                 }
-                // #2008 follow-up: the daily SCORES are drawn as bars. A line asserts continuity between
-                // readings, and on a series swinging ~20 points a day that climb-and-dive through values
-                // which never existed is most of what reads as noise. One slot per DAY positions the bars
-                // by date and turns a missing day into an empty slot. Levels (resting HR, HRV, skin temp)
-                // stay lines: those really do vary continuously between measurements.
+                // BARS or a line is the user's chart-style setting, and nothing else. #2008's follow-up
+                // decided it per METRIC here, forcing bars for the daily scores because a line asserts a
+                // continuity a daily score never travelled. That reasoning holds and the slot layout below
+                // is unchanged, but this screen had never read the setting, so a chosen LINE drew bars and
+                // a chosen BAR drew lines for every other metric. Trends applies the same preference to
+                // every metric, so a detail chart reached from a Today ring now agrees with the trend chart
+                // for that metric instead of contradicting it. See `vitalChartIsBars`.
+                //
+                // Read on recompose exactly as Trends reads it: SharedPreferences is not reactive, and
+                // reaching Settings means leaving this screen, so returning re-reads it. `chartStyle` is a
+                // remember key so flipping the setting rebuilds or drops the slots rather than serving the
+                // previous shape.
+                //
+                // One slot per DAY positions bars by date and turns a missing day into an empty slot.
                 // Remembered like `dayLabels` beside it: densifying rebuilds a slot per day and formats a
-                // label for each, and on the ALL range that is hundreds of both. Recomputing them every
-                // recomposition is the cost this screen already avoids for the line path's derived lists.
-                val bars = remember(filteredReadings, key) {
-                    if (vitalChartIsBars(key)) densifyByDay(filteredReadings) else null
+                // label for each, and on the ALL range that is hundreds of both. The slot count follows the
+                // RANGE rather than the metric, so a sparse series costs no more than a daily one.
+                val chartStyle = UnitPrefs.trendChartStyle(LocalContext.current)
+                // Folded over the FULL history, not the visible window: the reference is the reader's
+                // normal, which does not change because they narrowed the range to a week. Null for every
+                // metric but HRV and resting HR, and null until the baseline is trusted.
+                val baseline = remember(detail.readings, key) { vitalBaseline(key, detail.readings) }
+                val bars = remember(filteredReadings, key, chartStyle) {
+                    if (vitalChartIsBars(chartStyle)) densifyByDay(filteredReadings) else null
                 }
                 val barValues = remember(bars) { bars?.map { it.second } }
                 val barLabels = remember(bars) { bars?.map { shortDayLabel(it.first) } }
                 if (barValues != null && barLabels != null) {
                     BarChart(
+                        baselineValue = baseline,
                         values = barValues,
                         modifier = Modifier.height(Metrics.chartHeight),
                         color = detail.color,
@@ -2143,6 +2158,7 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     // Anchor the metrics whose natural range IS their interesting range, so a calm one
                     // stops being drawn as violently as a wild one.
                     yDomain = vitalChartYDomain(key),
+                    baselineValue = baseline,
                     // A daily trend has few enough readings for a marker each, and they are what say where
                     // the measurements actually are once gaps stretch the line between them.
                     showsPoints = true,

@@ -1,5 +1,6 @@
 package com.noop.ui
 
+import com.noop.analytics.Baselines
 import com.noop.data.Vo2MaxEstimator
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -85,21 +86,52 @@ internal fun dayEpochSeconds(readings: List<VitalReading>): List<Long>? {
 }
 
 /**
- * Which metrics are drawn as BARS rather than as a line.
+ * The personal baseline to annotate a vital chart with, or null when there is not one worth drawing.
  *
- * A line asserts continuity between points: it says the value travelled from one reading to the next. For
- * a daily score that is false, and it is most of what makes a spiky series look chaotic. The reported
- * Effort swings 19.8 points a day on a 0..42 range, so a line spends the whole chart climbing and diving
- * through values that never existed.
+ * HRV and resting HR only. Both are LEVELS whose absolute number means little without the reader's own
+ * normal: "HRV 42" says nothing on its own, while "42, and your baseline is 54" says the thing they came
+ * to find out. The daily scores need no such reference, since 0..100 and 0..21 are already interpretable,
+ * and skin temperature already offers a signed deviation view of its own.
  *
- * Bars claim nothing between slots. A zero day is a short bar beside a tall one instead of a plunge, and a
- * day with no reading is simply an empty slot.
+ * The SAME fold the vitals grid bands against ([VitalBands.band] calls `Baselines.foldHistory` with this
+ * cfg), so a reading the grid calls out of range cannot sit on the right side of the rule on the chart
+ * next to it. One definition of "your normal" or the two surfaces will disagree in front of the reader.
  *
- * Only the daily SCORES. Resting HR, HRV, skin temperature, respiratory rate and blood oxygen are levels
- * that genuinely do vary continuously between measurements, so a line is the honest shape for them, and
- * Fitness Age and Vitality are too sparse to fill a bar chart.
+ * Null unless the state is TRUSTED, which is at least fourteen valid nights and not stale. A rule drawn
+ * from four nights would be a guess wearing the authority of a reference line, and the calibrating case
+ * is exactly when a reader is most likely to over-read it. Values arrive oldest to newest, which is what
+ * the EWMA fold expects, and what `ORDER BY day ASC` gives.
  */
-internal fun vitalChartIsBars(key: String): Boolean = key in setOf("recovery", "rest", "strain")
+internal fun vitalBaseline(key: String, readings: List<VitalReading>): Double? {
+    val cfgKey = when (key) {
+        "hrv" -> "hrv"
+        "rhr" -> "resting_hr"
+        else -> return null
+    }
+    val cfg = Baselines.metricCfg[cfgKey] ?: return null
+    val state = Baselines.foldHistory(readings.map { it.value }, cfg)
+    return if (state.trusted) state.baseline else null
+}
+
+/**
+ * Whether this screen draws BARS rather than a line: the user's chart-style setting, and nothing else.
+ *
+ * #2011 chose bars per METRIC instead, forcing them for the daily scores because a line asserts continuity
+ * between points and a daily score never travelled between its readings. The reasoning holds, but the rule
+ * did not: this screen had never consulted the setting at all, so the override made a chosen `LINE` draw
+ * bars anyway. It also left the inverse broken in the other direction, where a chosen `BAR` still got lines
+ * here for every metric outside those three.
+ *
+ * The setting is the setting. Trends already applies it to every metric ([TrendsScreen] reads the same
+ * preference), so a detail chart reached from a Today ring now agrees with the trend chart for the same
+ * metric rather than contradicting it.
+ *
+ * That leaves #2011's argument attached to the DEFAULT rather than to an override, which is where it can be
+ * acted on visibly: if bars really are the honest shape for a daily score, the default belongs on bars, in
+ * the picker, where the setting and the chart say the same thing. Overriding a user silently is not the
+ * same claim and should not be made on its behalf.
+ */
+internal fun vitalChartIsBars(style: TrendChartStyle): Boolean = style == TrendChartStyle.BAR
 
 /**
  * One slot per DAY across the window, rather than one per reading.
