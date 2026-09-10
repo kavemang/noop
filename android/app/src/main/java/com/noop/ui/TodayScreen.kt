@@ -164,6 +164,8 @@ import com.noop.analytics.StepsEstimateEngine
 import com.noop.analytics.StrainScorer
 import com.noop.ble.WhoopModel
 import com.noop.data.DailyMetric
+import com.noop.widget.StressPoint
+import com.noop.widget.StressWidgetProducer
 import com.noop.data.HrBucket
 import com.noop.data.SleepSession
 import com.noop.data.WhoopRepository
@@ -3488,9 +3490,23 @@ private fun HostedCardsSection(cards: List<HostedCard>, days: List<DailyMetric>,
             null
         }
     }
+    // Today's stress curve, loaded only when the card is actually hosted — the same "hosting none pays
+    // nothing" rule the sleep model above follows. Routed through the SAME gated producer the stress
+    // widget publishes from, so hosting this card costs one indexed COUNT on an unchanged day and the
+    // card and the widget can never show different curves.
+    val needsStressCurve = cards.contains(HostedCard.STRESS_TODAY)
+    var stressCurve by remember { mutableStateOf<List<StressPoint>>(emptyList()) }
+    LaunchedEffect(needsStressCurve, days, viewModel.activeStrapId) {
+        stressCurve = if (needsStressCurve) {
+            StressWidgetProducer.todayCurve(viewModel.repo, viewModel.activeStrapId)?.points ?: emptyList()
+        } else {
+            emptyList()
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.sectionGap)) {
         cards.forEach { card ->
             when (card) {
+                HostedCard.STRESS_TODAY -> StressTodayCard(stressCurve)
                 HostedCard.SLEEP_MARKS -> SleepMarkCard(
                     onMark = { type ->
                         val mark = SleepMark.now(type)
@@ -5997,8 +6013,13 @@ private fun HeartRateTrendCard(
     // TODAY that is the identical full-buckets list, so the default path is byte-for-byte the old one.
     val bpm = remember(winBuckets) { winBuckets.map { it.avgBpm } }
     val latest = bpm.last().roundToInt()
-    val min = bpm.min().roundToInt()
-    val max = bpm.max().roundToInt()
+    // #2032: the Min/Max READOUT reads the samples, not the mean curve. Taken from `bpm` these described
+    // the calmest and busiest five minutes, so a hard interval read lower here than in the workout that
+    // contained it, and the resting dip read higher than it was. The y-rail below stays on the means,
+    // because that is the series it labels: raw extremes there would squash the drawn curve into the
+    // middle of its own axis. Avg is left on the means deliberately, see the PR.
+    val min = remember(winBuckets) { winBuckets.minOf { it.minBpm } }.roundToInt()
+    val max = remember(winBuckets) { winBuckets.maxOf { it.maxBpm } }.roundToInt()
     val avg = bpm.average().roundToInt()
 
     // #829 - the RENDERED subset: the zoom window narrows which of the loaded buckets draw (the gesture
