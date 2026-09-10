@@ -123,6 +123,11 @@ private fun CoachSetup(vm: CoachViewModel) {
     val refreshingModels by vm.refreshingModels.collectAsStateWithLifecycle()
     val customBaseUrl by vm.customBaseUrl.collectAsStateWithLifecycle()
     val customAuthHeader by vm.customAuthHeader.collectAsStateWithLifecycle()
+    // The setup card had no error line at all, so every way this screen can fail before a key is
+    // committed failed silently: a Refresh the provider turned away, a Connect to a server that wants
+    // auth. The wearer saw a button do nothing. The chat has had one since the beginning; this is the
+    // half that was missing.
+    val error by vm.error.collectAsStateWithLifecycle()
     var keyInput by remember { mutableStateOf("") }
     val isCustom = provider == AiProvider.CUSTOM
 
@@ -236,6 +241,20 @@ private fun CoachSetup(vm: CoachViewModel) {
                 )
             }
 
+            // Whatever the last attempt from THIS card ran into. No repair affordance beside it:
+            // unlike the chat, the key field is already on screen, which is the whole point of the card.
+            val errorMsg = error
+            if (errorMsg != null) {
+                Text(
+                    errorMsg,
+                    style = NoopType.subhead,
+                    color = Palette.statusCritical,
+                    modifier = Modifier.semantics {
+                        contentDescription = uiString(R.string.l10n_coach_screen_coach_error_error_ad9c8c46, errorMsg)
+                    },
+                )
+            }
+
             // Privacy note, one line, always visible.
             PrivacyNote(local = isCustom)
         }
@@ -250,6 +269,8 @@ private fun CoachChat(vm: CoachViewModel) {
     val messages by vm.messages.collectAsStateWithLifecycle()
     val sending by vm.sending.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
+    // Only ever read inside the error branch below — see CoachViewModel.keyRejected.
+    val keyRejected by vm.keyRejected.collectAsStateWithLifecycle()
     val provider by vm.provider.collectAsStateWithLifecycle()
     val model by vm.model.collectAsStateWithLifecycle()
     val suggestions by vm.suggestions.collectAsStateWithLifecycle()
@@ -259,6 +280,10 @@ private fun CoachChat(vm: CoachViewModel) {
     var input by remember { mutableStateOf(draftPrefs.getString("draft", "") ?: "") }
     // K2: confirmation gate for the destructive "Clear conversation" action.
     var showClearConfirm by remember { mutableStateOf(false) }
+    // The corrected key, typed into the editor the rejection message opens. Separate from `input` so a
+    // half-typed question is not lost while fixing the key, and cleared on save so a secret does not
+    // sit in composition state after it has been stored.
+    var keyFix by remember { mutableStateOf("") }
 
     // Refresh the contextual chips whenever the chat empties (so a fresh sync updates them) and
     // once on first show. Best-effort; the VM falls back to the generic set on any failure.
@@ -341,14 +366,21 @@ private fun CoachChat(vm: CoachViewModel) {
         }
 
         // Data-access consent, off by default; no metrics are sent until this is on.
+        //
+        // The ON line NAMES what a session carries, rather than saying "workouts" and leaving the
+        // reader to guess how much that is. It used to mean a count and an effort figure; since #2033
+        // it means the sport, how long, how far and how hard, per session. That is a materially
+        // different disclosure and the toggle is the only place someone is asked to agree to it, so it
+        // says so instead of making them read a PR to find out. Localised rather than inline, which the
+        // i18n baseline also wanted: an English literal here reached every locale untranslated.
         val consent by vm.consent.collectAsStateWithLifecycle()
         NoopCard(padding = 14.dp, tint = Palette.chargeColor) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(uiString(R.string.l10n_coach_screen_let_the_coach_use_my_data_405d1188), style = NoopType.subhead, color = Palette.textPrimary)
                     Text(
-                        if (consent) "On: your recovery, sleep, HRV and workouts are shared with the provider for tailored coaching."
-                        else "Off: the coach answers generally and sends none of your metrics.",
+                        if (consent) uiString(R.string.coach_consent_on)
+                        else uiString(R.string.coach_consent_off),
                         style = NoopType.footnote, color = Palette.textTertiary,
                     )
                 }
@@ -401,6 +433,32 @@ private fun CoachChat(vm: CoachViewModel) {
                 color = Palette.statusCritical,
                 modifier = Modifier.semantics { contentDescription = uiString(R.string.l10n_coach_screen_coach_error_error_ad9c8c46, errorMsg) },
             )
+            // A rejected key is the one failure the wearer can act on from here, and the message
+            // already tells them to: "Check the key and try again". Until this, the screen offered
+            // nowhere to check it. The field is rendered INSIDE the error branch, never on its own
+            // flag, so it cannot outlive the message that justifies it.
+            if (keyRejected) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        uiString(R.string.coach_key_rejected_hint),
+                        style = NoopType.footnote,
+                        color = Palette.textSecondary,
+                    )
+                    CoachKeyField(
+                        value = keyFix,
+                        onValueChange = { keyFix = it },
+                        placeholder = uiString(R.string.coach_key_rejected_placeholder, provider.displayName),
+                    )
+                    CoachPrimaryButton(
+                        label = uiString(R.string.coach_key_rejected_action),
+                        enabled = keyFix.isNotBlank(),
+                        onClick = {
+                            vm.saveKey(context, keyFix)
+                            keyFix = ""
+                        },
+                    )
+                }
+            }
         }
 
         // Input row + Send, a frosted overlay surface so the composer reads as a docked input bar.

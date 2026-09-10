@@ -10568,71 +10568,6 @@
         }
       }
     },
-    "%lld of %lld nights": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld von %lld Nächten"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld of %lld nights"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld de %lld noches"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld de %lld nuits"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld di %lld notti"
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld de %lld noites"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld из %lld ночей"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld / %lld 晚"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld / %lld 晚"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld z %lld nocy"
-          }
-        }
-      }
-    },
     "%lld of %lld sessions": {
       "localizations": {
         "de": {
@@ -153044,6 +152979,70 @@
         }
       }
     },
+    "Stress through the day": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress im Tagesverlauf"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress through the day"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estrés a lo largo del día"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress au fil de la journée"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress durante la giornata"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stres w ciągu dnia"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress ao longo do dia"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стресс в течение дня"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天压力变化"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全天壓力變化"
+          }
+        }
+      }
+    },
     "Stress %@ of 3, %@": {
       "localizations": {
         "de": {
@@ -210243,6 +210242,110 @@
         "ru": {"stringUnit": {"state": "translated", "value": "Открывает тренд и показания"}},
         "zh-Hans": {"stringUnit": {"state": "translated", "value": "打开趋势和读数"}},
         "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟趨勢與讀數"}}
+    } },
+    "Earlier beats cannot be scored" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Frühere Herzschläge nicht auswertbar"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Los latidos anteriores no se pueden puntuar"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Battements antérieurs non évaluables"}},
+        "it": {"stringUnit": {"state": "translated", "value": "I battiti precedenti non sono valutabili"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Wcześniejszych uderzeń nie można ocenić"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Batimentos anteriores não podem ser pontuados"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Ранние удары невозможно оценить"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "早期心跳无法评分"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "早期心跳無法評分"}}
+    } },
+    "This night was recorded before NOOP labelled which WHOOP 5 transport each heartbeat came from, so its intervals mix two different units with nothing stored to tell them apart. The night stays in your history, and nights recorded from now on score normally." : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Diese Nacht wurde aufgezeichnet, bevor NOOP festhielt, über welchen WHOOP-5-Übertragungsweg jeder Herzschlag kam. Ihre Intervalle mischen deshalb zwei verschiedene Einheiten, und es ist nichts gespeichert, was sie unterscheidbar macht. Die Nacht bleibt in deinem Verlauf, und ab jetzt aufgezeichnete Nächte werden normal bewertet."}},
+        "es": {"stringUnit": {"state": "translated", "value": "Esta noche se registró antes de que NOOP etiquetara de qué transporte de WHOOP 5 procedía cada latido, así que sus intervalos mezclan dos unidades distintas y no hay nada guardado que permita distinguirlas. La noche permanece en tu historial y las noches registradas a partir de ahora se puntúan con normalidad."}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Cette nuit a été enregistrée avant que NOOP n'indique de quel transport WHOOP 5 provenait chaque battement. Ses intervalles mêlent donc deux unités différentes, sans rien d'enregistré pour les distinguer. La nuit reste dans votre historique, et les nuits enregistrées à partir de maintenant sont évaluées normalement."}},
+        "it": {"stringUnit": {"state": "translated", "value": "Questa notte è stata registrata prima che NOOP indicasse da quale trasporto WHOOP 5 provenisse ogni battito, quindi i suoi intervalli mescolano due unità diverse e non è memorizzato nulla che permetta di distinguerle. La notte resta nella tua cronologia e le notti registrate da ora in poi vengono valutate normalmente."}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Ta noc została zarejestrowana, zanim NOOP zaczął oznaczać, z którego kanału WHOOP 5 pochodzi każde uderzenie, więc jej odstępy mieszają dwie różne jednostki i nic zapisanego nie pozwala ich rozróżnić. Noc pozostaje w Twojej historii, a noce zarejestrowane od teraz są oceniane normalnie."}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Esta noite foi registada antes de o NOOP identificar de que transporte WHOOP 5 vinha cada batimento, por isso os seus intervalos misturam duas unidades diferentes e não há nada guardado que permita distingui-las. A noite mantém-se no teu histórico e as noites registadas a partir de agora são pontuadas normalmente."}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Эта ночь была записана до того, как NOOP начал отмечать, по какому каналу WHOOP 5 пришёл каждый удар, поэтому её интервалы смешивают две разные единицы, и ничего не сохранено, что позволило бы их различить. Ночь остаётся в вашей истории, а ночи, записанные с этого момента, оцениваются как обычно."}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "这一夜是在 NOOP 标记每次心跳来自哪条 WHOOP 5 传输通道之前记录的，因此其间隔混合了两种不同的单位，而且没有保存任何可以区分它们的信息。该夜仍保留在你的历史记录中，从现在起记录的夜晚会正常评分。"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "這一夜是在 NOOP 標記每次心跳來自哪條 WHOOP 5 傳輸通道之前記錄的，因此其間隔混合了兩種不同的單位，而且沒有儲存任何可以區分它們的資訊。該夜仍保留在你的歷史記錄中，從現在起記錄的夜晚會正常評分。"}}
+    } },
+    "Paste the corrected key. Your conversation is kept." : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Füge den korrigierten Schlüssel ein. Deine Unterhaltung bleibt erhalten."}},
+        "es": {"stringUnit": {"state": "translated", "value": "Pega la clave corregida. Tu conversación se conserva."}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Collez la clé corrigée. Votre conversation est conservée."}},
+        "it": {"stringUnit": {"state": "translated", "value": "Incolla la chiave corretta. La tua conversazione viene mantenuta."}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Wklej poprawiony klucz. Twoja rozmowa zostanie zachowana."}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Cola a chave corrigida. A tua conversa é mantida."}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Вставьте исправленный ключ. Ваш разговор сохранится."}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "粘贴更正后的密钥。你的对话会保留。"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "貼上更正後的密鑰。你的對話會保留。"}}
+    } },
+    "Corrected API key" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Korrigierter API-Schlüssel"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Clave de API corregida"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Clé d'API corrigée"}},
+        "it": {"stringUnit": {"state": "translated", "value": "Chiave API corretta"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Poprawiony klucz API"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Chave de API corrigida"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Исправленный ключ API"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "更正后的 API 密钥"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "更正後的 API 密鑰"}}
+    } },
+    "Open your Charge detail" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Ladung im Detail öffnen"}},
+        "en": {"stringUnit": {"state": "translated", "value": "Open your Charge detail"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Abre el detalle de Carga"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Ouvrir le détail de la charge"}},
+        "it": {"stringUnit": {"state": "translated", "value": "Apri il dettaglio della carica"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Otwórz szczegóły Ładunku"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Abrir o detalhe da carga"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Открыть подробности заряда"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "打开充能详情"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟充能詳情"}}
+    } },
+    "Open your Effort detail" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Belastung im Detail öffnen"}},
+        "en": {"stringUnit": {"state": "translated", "value": "Open your Effort detail"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Abre el detalle de Esfuerzo"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Ouvrir le détail de l'effort"}},
+        "it": {"stringUnit": {"state": "translated", "value": "Apri il dettaglio dello sforzo"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Otwórz szczegóły Wysiłku"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Abrir o detalhe do esforço"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Открыть подробности усилия"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "打开消耗详情"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟消耗詳情"}}
+    } },
+    "Open your Rest detail" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Erholung im Detail öffnen"}},
+        "en": {"stringUnit": {"state": "translated", "value": "Open your Rest detail"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Abre el detalle de Descanso"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Ouvrir le détail du repos"}},
+        "it": {"stringUnit": {"state": "translated", "value": "Apri il dettaglio del riposo"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Otwórz szczegóły Odpoczynku"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Abrir o detalhe do descanso"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Открыть подробности отдыха"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "打开休息详情"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟休息詳情"}}
+    } },
+    "Open your Stress detail" : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "Stress im Detail öffnen"}},
+        "en": {"stringUnit": {"state": "translated", "value": "Open your Stress detail"}},
+        "es": {"stringUnit": {"state": "translated", "value": "Abre el detalle de Estrés"}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Ouvrir le détail du stress"}},
+        "it": {"stringUnit": {"state": "translated", "value": "Apri il dettaglio dello stress"}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Otwórz szczegóły Stresu"}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Abrir o detalhe do stress"}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Открыть подробности стресса"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "打开压力详情"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟壓力詳情"}}
+    } },
+    "On: your charge, rest, HRV and workouts are sent to the provider, each workout with its sport, duration, distance and heart rate." : { "localizations" : {
+        "de": {"stringUnit": {"state": "translated", "value": "An: Ladung, Erholung, HRV und Workouts gehen an den Anbieter, jedes Workout mit Sportart, Dauer, Distanz und Herzfrequenz."}},
+        "en": {"stringUnit": {"state": "translated", "value": "On: your charge, rest, HRV and workouts are sent to the provider, each workout with its sport, duration, distance and heart rate."}},
+        "es": {"stringUnit": {"state": "translated", "value": "Activado: tu carga, descanso, HRV y entrenamientos se envían al proveedor, cada entrenamiento con su deporte, duración, distancia y frecuencia cardíaca."}},
+        "fr": {"stringUnit": {"state": "translated", "value": "Activé : votre charge, repos, VFC et entraînements sont envoyés au fournisseur, chaque entraînement avec son sport, sa durée, sa distance et sa fréquence cardiaque."}},
+        "it": {"stringUnit": {"state": "translated", "value": "Attivo: carica, riposo, HRV e allenamenti vengono inviati al provider, ogni allenamento con sport, durata, distanza e frequenza cardiaca."}},
+        "pl": {"stringUnit": {"state": "translated", "value": "Włączone: Twój ładunek, odpoczynek, HRV i treningi trafiają do dostawcy, każdy trening ze sportem, czasem, dystansem i tętnem."}},
+        "pt-PT": {"stringUnit": {"state": "translated", "value": "Ligado: a tua carga, descanso, VFC e treinos são enviados ao fornecedor, cada treino com o desporto, duração, distância e frequência cardíaca."}},
+        "ru": {"stringUnit": {"state": "translated", "value": "Включено: заряд, отдых, ВСР и тренировки отправляются провайдеру, каждая тренировка с видом спорта, длительностью, дистанцией и пульсом."}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "开启：你的充能、休息、HRV 和训练会发送给服务商，每次训练包含运动类型、时长、距离和心率。"}},
+        "zh-Hant": {"stringUnit": {"state": "translated", "value": "開啟：你的充能、休息、HRV 和訓練會傳送給服務商，每次訓練包含運動類型、時長、距離和心率。"}}
     } }
   },
   "version": "1.0"
