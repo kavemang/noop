@@ -4154,6 +4154,16 @@ class WhoopBleClient(
     @Volatile
     private var whoopIsActiveDevice = true
 
+    /**
+     * Whether a WHOOP is the ACTIVE device, for readouts that must describe the right band (#2075).
+     *
+     * Read-only view of the flag [setWhoopIsActiveDevice] maintains from the coordinator's own start/stop
+     * closures, which derive it from `SourceIdentity.isWhoop` on the active row. Exposed so a producer on
+     * a hot path can ask without a registry read: the widget push rides a collector driven by live heart
+     * rate, and reading the DB there to answer a battery label would be absurd.
+     */
+    val activeDeviceIsWhoop: Boolean get() = whoopIsActiveDevice
+
     /** The last entry point [whoopConnectAllowed] turned away, so a rotation timer cannot flood the log. */
     private var lastBlockedConnectReason: String? = null
 
@@ -7650,6 +7660,19 @@ class WhoopBleClient(
                                     val p = !isFutureDatedNewest(newestForPending, wallNowP) &&
                                         (newestForPending - f) > AUTO_CONTINUE_BEHIND_GAP_SECONDS
                                     if (_state.value.historyPendingSync != p) {
+                                        // #2012: say WHY, on the flip only. This half of the Rest
+                                        // "Pending sync" state used to change in total silence.
+                                        log(
+                                            PendingSyncDiagnostic.line(
+                                                pending = p,
+                                                site = PendingSyncDiagnostic.SITE_CONNECT,
+                                                newestUnix = newestForPending,
+                                                frontierUnix = f,
+                                                futureDated = isFutureDatedNewest(newestForPending, wallNowP),
+                                                persistedRows = null,
+                                                thresholdSec = AUTO_CONTINUE_BEHIND_GAP_SECONDS,
+                                            ),
+                                        )
                                         _state.value = _state.value.copy(historyPendingSync = p)
                                     }
                                 }
@@ -10578,6 +10601,19 @@ class WhoopBleClient(
                 persistedSensorRows &&
                 (newest - frontier) > AUTO_CONTINUE_BEHIND_GAP_SECONDS
             if (_state.value.historyPendingSync != pending) {
+                // #2012: say WHY, on the flip only (see the connect site).
+                log(
+                    PendingSyncDiagnostic.line(
+                        pending = pending,
+                        site = PendingSyncDiagnostic.SITE_POST_OFFLOAD,
+                        newestUnix = newest,
+                        frontierUnix = frontier,
+                        // Only meaningful with a newest to test; the formatter ignores it without one.
+                        futureDated = newest != null && isFutureDatedNewest(newest, wallNow),
+                        persistedRows = persistedSensorRows,
+                        thresholdSec = AUTO_CONTINUE_BEHIND_GAP_SECONDS,
+                    ),
+                )
                 _state.value = _state.value.copy(historyPendingSync = pending)
             }
             // #266: local only — NOT cached on the instance. A future-dated newest (#1012) makes the
