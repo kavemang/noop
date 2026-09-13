@@ -675,10 +675,22 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// One-shot delay before a self-chained drain pass (see `finishDrain`). Invalidated on teardown.
     private var chainedDrainTimer: Timer?
     /// Periodic re-fetch while connected, so an overnight-connected session (or one left open after a nap)
-    /// picks up freshly-banked sleep data without needing a reconnect. Mirrors BLEManager's ~15 min
-    /// periodic WHOOP history-offload floor.
+    /// picks up freshly-banked sleep data without needing a reconnect.
+    ///
+    /// MEASURED 2026-08-10 (capture `…-260810-1556`, 2h31m at 96.6% connected): this interval is not just a
+    /// backstop, it is the ACTUAL DATA CADENCE. Between fetches the ring delivered **nothing at all** —
+    /// seven arrival gaps of 893-928 s inside live sessions, clustering exactly on the old 900 s value,
+    /// while the app was awake (59-60 live-HR re-arms per gap), the link was up and the ring was worn. Only
+    /// **2.1%** of `0x80` "live HR" arrived within 15 s of its own second; the median record was **385 s**
+    /// old on arrival. So a user watching live HR was watching a 6-minute-old burst.
+    ///
+    /// 900 -> 300 s halves-and-then-some the worst-case staleness at a marginal cost: while live HR is on
+    /// the app already writes `dhr_enable`+`dhr_subscribe` every 15 s (462 commands/h measured), against
+    /// which the whole history-fetch machinery was 21 commands/h. The payload is unchanged either way — the
+    /// same records arrive, in smaller chunks — and `fetchHistoryIfIdle` is a no-op unless the driver is
+    /// idle-streaming, so a fetch never overlaps a drain.
     private var historyFetchTimer: Timer?
-    private let historyFetchInterval: TimeInterval = 900
+    private let historyFetchInterval: TimeInterval = 300
 
     /// Kick a history-fetch pass at the current cursor, but ONLY when the driver is idle-streaming (never
     /// overlaps a fetch already in flight - the driver's own phase is the guard, so this is safe to call
@@ -796,7 +808,40 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             chainedDrainTimer = t
         } else if completed {
             chainedDrainPasses = 0   // healthy full completion re-arms the cap for future backlogs
+            noteCompletedOffload()
         }
+    }
+
+    /// Stamp `LiveState.lastSyncedAt` after a drain that COMPLETED and actually banked something, so the
+    /// ring's freshly-offloaded history gets scored now instead of waiting on the 15-minute periodic tick.
+    ///
+    /// WHY THIS EXISTS: `AppModel` re-scores off a debounced `live.$lastSyncedAt` sink
+    /// (`refreshAfterCompletedBackfill` → `repo.refresh` + `intelligence.analyzeRecent`), but only
+    /// `BLEManager.exitBackfilling` (the WHOOP `HISTORY_COMPLETE` path) ever stamped it — the Oura drain
+    /// never did. Observed consequence (2026-08-02 capture): the morning's `analyzeRecent` ran at app
+    /// launch ~09:25, the ring delivered that night's hypnogram at 09:31:44, and nothing re-scored after,
+    /// so the night stayed `totalSleepMin=nil, matched=0` despite a complete 541-minute session sitting in
+    /// the DB. Relaunching did not help — it just re-ran the same premature pass. Reusing the WHOOP signal
+    /// (rather than adding a second refresh path) means the ring inherits the SAME `.debounce(2s)` +
+    /// `removeDuplicates()` coalescing that #755 added for slice storms.
+    ///
+    /// GATES, so this cannot become a refresh storm:
+    /// - `feedsLive` — the discovery-only wizard scanner must never touch `LiveState` at all.
+    /// - `drain.maxStoredRingTime > 0` — only a drain that BANKED a record counts. A reconnect that
+    ///   completes instantly at `bytes_left 0` with nothing new (the common case on repeated connects)
+    ///   banks nothing, so it does not stamp and does not trigger a re-score.
+    private func noteCompletedOffload() {
+        guard feedsLive, drain.maxStoredRingTime > 0 else { return }
+        let now = Date().timeIntervalSince1970
+        // Logged because a BLE-path change is only verifiable on real hardware: this line appearing AFTER
+        // the night's `sleep-phase record` lines, followed by a fresh `sleep day=` with a non-nil
+        // totalSleepMin, is exactly the sequence that was missing.
+        log("Oura: offload complete - marking synced so the new history is scored now (not at the next periodic tick)")
+        live.lastSyncedAt = now
+        // Mirrors BLEManager: persisted so "last offload completed" survives a relaunch. Before this, a
+        // ring-only install had no completed-offload timestamp at all and read "No completed offload yet"
+        // forever, however many nights it had actually synced.
+        UserDefaults.standard.set(now, forKey: "lastSyncedAt")
     }
 
     private func restartBatchQuietTimer() {
@@ -961,9 +1006,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
             // startTs on the ROUNDED onset (stable across the ring's re-serves) rather than the end-anchored
             // first-code time — so re-serves of one night share a PK and the displayed bedtime is the true
             // onset. The completeness guard in the persist closure then suppresses/replaces any duplicate.
+            // `safeKeyedStart` refuses the rekey when `sleepStart` didn't actually bind in the assembler's
+            // own clip (item 22, 2026-09-12: a mis-paired 0x49 window otherwise wrote a startTs 16 min
+            // AFTER its own endTs) — see its doc comment for why `onset <= mapped.startTs` is the exact test.
             let session: CachedSleepSession = {
-                guard onsetKeying(), let onset = sleepStart else { return mapped }
-                return mapped.withStartTs(SleepSessionDedup.keyedStart(onsetUnixSeconds: onset))
+                guard onsetKeying(), let onset = sleepStart,
+                      let keyed = SleepSessionDedup.safeKeyedStart(onset: onset, mapped: mapped) else { return mapped }
+                return mapped.withStartTs(keyed)
             }()
             let start = session.startTs
             // #1284 residual 3: log when this persist lands wholly inside — or overlapping — a session already
