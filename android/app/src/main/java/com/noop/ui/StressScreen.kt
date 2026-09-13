@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.noop.analytics.DaytimeBaselines
 import com.noop.analytics.DaytimeStress
 import com.noop.analytics.HrvFreqDomain
@@ -63,6 +64,7 @@ import com.noop.analytics.StressIndex
 import com.noop.data.DailyMetric
 import com.noop.widget.StressPoint
 import com.noop.widget.StressTrace
+import com.noop.widget.StressWidgetProducer
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -70,6 +72,7 @@ import java.util.Locale
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlinx.coroutines.delay
 
 // MARK: - Stress Monitor (ported from Strand/Screens/StressView.swift)
 //
@@ -126,12 +129,40 @@ fun StressScreen(vm: AppViewModel, onBreathe: () -> Unit = {}) {
     // span/beat gate is not met. Faithful twin of the iOS StressView readouts.
     var stressIndex by remember { mutableStateOf<StressIndex.Components?>(null) }
     var freqHrv by remember { mutableStateOf<HrvFreqDomain.Bands?>(null) }
-    androidx.compose.runtime.LaunchedEffect(vm.activeStrapId) {
-        val read = runCatching { loadDaytimeStress(vm, NoopPrefs.stressPersonalBaseline(context)) }
-            .getOrDefault(DaytimeReadout(DaytimeStress.Result.EMPTY, null, null))
-        daytime = read.daytime
-        stressIndex = read.stressIndex
-        freqHrv = read.freqHrv
+    // #2144: on the SAME interval the Today card and the widget score on, and gated the same way.
+    // This used to read once, on open, which is why the screen happened to be the fresher of the two
+    // when the report was filed: it had simply been opened later. Refreshing only the card would have
+    // moved the disagreement rather than ended it, since a screen left open would then be the stale
+    // one. Both surfaces now age at the same rate, which is the actual ask in the report.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.LaunchedEffect(vm.activeStrapId, lifecycleOwner) {
+        // Guarded on the same fingerprint the widget producer memoises against, for the same reason.
+        // `loadDaytimeStress` is the expensive read on this screen, three windowed row fetches plus the
+        // two HRV engines, and repeating it was free when it happened once on open. On a timer it is
+        // not: with the strap disconnected, or simply quiet, nothing about today's heart rate has moved
+        // and re-reading produces a result identical to the one already on screen. An indexed count and
+        // max answers that for the price of neither.
+        var lastHrFingerprint: Pair<Int, Long>? = null
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                val nowSeconds = System.currentTimeMillis() / 1000L
+                val window = stressLocalDayWindowContaining(nowSeconds, ZoneId.systemDefault())
+                val fingerprint = runCatching {
+                    vm.repo.hrFingerprintWindow(vm.activeStrapId, window.fromEpochSecond, nowSeconds)
+                }.getOrNull()
+                // A failed fingerprint reads as "cannot tell", which loads rather than skips: being
+                // wrong about this costs one pass, being wrong the other way freezes the screen.
+                if (fingerprint == null || fingerprint != lastHrFingerprint) {
+                    lastHrFingerprint = fingerprint
+                    val read = runCatching { loadDaytimeStress(vm, NoopPrefs.stressPersonalBaseline(context)) }
+                        .getOrDefault(DaytimeReadout(DaytimeStress.Result.EMPTY, null, null))
+                    daytime = read.daytime
+                    stressIndex = read.stressIndex
+                    freqHrv = read.freqHrv
+                }
+                delay(StressWidgetProducer.RESCORE_INTERVAL_MS)
+            }
+        }
     }
 
     // Rebuild the model only when the inputs (days, stored) actually change — the
@@ -522,6 +553,22 @@ private fun StressAdvancedCard(
 
 // MARK: - 3 · Daytime timeline (intraday, same 0–3 proxy)
 
+/**
+ * How far behind the clock the newest scored hour has to be before the timeline says so (#2144).
+ *
+ * An hour is scored once its bucket holds [DaytimeStress.minHourHrSamples] heart-rate samples, and
+ * that is the ONLY test: there is no completeness rule, so the hour in progress scores as soon as it
+ * has banked enough, which on a strap streaming at roughly 1 Hz is a few minutes in. What actually
+ * decides how far back the curve ends is therefore sample DENSITY, not the clock, and a strap that
+ * banks history in chunks rather than streaming leaves recent hours under the bar for a while.
+ *
+ * So a healthy curve can end anywhere from minutes to an hour or two back depending on how the day's
+ * data arrived, and a threshold here has to clear all of that to avoid crying wolf. Two and a half
+ * hours is past what any of it explains, which is about where a reader starts wondering whether
+ * syncing has died rather than reading the chart.
+ */
+private const val staleTimelineSeconds: Long = 150L * 60L
+
 @Composable
 private fun StressDaytimeSection(
     day: DaytimeStress.Result,
@@ -578,6 +625,24 @@ private fun StressDaytimeSection(
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                 )
+                // Where the curve actually stops, said plainly, and only when it is far enough behind
+                // the clock to look broken (#2144). The caption above gives the rule; a reader looking
+                // at a line that ends at 2pm on an axis running to 4pm wants to know that THIS hour is
+                // the reason, not a sync that has died. Quiet on an ordinary day, when the newest
+                // scored hour is simply the one that has just finished.
+                val lastScored = day.scored.lastOrNull()?.startTs
+                if (lastScored != null &&
+                    System.currentTimeMillis() / 1000L - lastScored >= staleTimelineSeconds
+                ) {
+                    Text(
+                        uiString(
+                            R.string.l10n_stress_screen_scored_through_1_s_later_hours_fbb7d6c7,
+                            pointTimeLabel(lastScored),
+                        ),
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                }
             }
         }
 
@@ -624,10 +689,10 @@ internal fun StressTodayCard(points: List<StressPoint>, modifier: Modifier = Mod
                 // which shows a number rather than this curve.
                 Overline(uiString(R.string.hosted_card_stress_title), modifier = Modifier.weight(1f))
                 if (stats != null) {
-                    val peakTenths = ((stats.peak.level ?: 0.0) * 10).roundToInt().coerceIn(0, 30)
                     Text(
                         uiString(R.string.trends_peak) +
-                            " ${peakTenths / 10}.${peakTenths % 10} · ${pointTimeLabel(stats.peak.ts)}",
+                            " ${StressTrace.formatLevel(stats.peak.level ?: 0.0)} · " +
+                            pointTimeLabel(stats.peak.ts),
                         style = NoopType.footnote,
                         color = Palette.textSecondary,
                     )
@@ -767,10 +832,9 @@ internal fun StressTodayCard(points: List<StressPoint>, modifier: Modifier = Mod
                     }
                 }
 
-                val avgTenths = (stats.mean * 10).roundToInt().coerceIn(0, 30)
                 Text(
                     uiString(R.string.l10n_stress_screen_avg_a178769d) +
-                        " ${avgTenths / 10}.${avgTenths % 10}",
+                        " ${StressTrace.formatLevel(stats.mean)}",
                     style = NoopType.footnote,
                     color = textTertiary,
                 )
@@ -1200,15 +1264,29 @@ private fun MarkerTile(
     higherIsStress: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val deltaText: String
+    val deltaText: String?
     val deltaColor: Color
-    if (delta != null && kotlin.math.abs(delta) >= 0.5) {
+    if (delta == null) {
+        // NO CHIP, rather than a claim we cannot make. The delta is null when today has no reading or
+        // there is no 30-day baseline to stand it against, and both of those used to render the
+        // at-baseline chip: a tile with no reading read "— at baseline", and a first-week tile said a
+        // reading sat exactly on a baseline that did not exist yet. StatTile draws no chip for null.
+        deltaText = null
+        deltaColor = Palette.textTertiary
+    } else if (kotlin.math.abs(delta) >= 0.5) {
         val up = delta > 0
         val isStressful = (up == higherIsStress)
-        deltaText = "${if (up) "+" else "−"}${kotlin.math.abs(delta).roundToInt()} vs base"
+        // The magnitude alone, signed. TrendChip reads the sign to pick its ▲/▼, and the section
+        // header two lines up already says "vs 30-day baseline", so spelling "vs base" again inside
+        // the chip spent width on a word the reader has just been given (#2145).
+        deltaText = "${if (up) "+" else "−"}${kotlin.math.abs(delta).roundToInt()}"
         deltaColor = if (isStressful) Palette.statusWarning else Palette.statusPositive
     } else {
-        deltaText = "at baseline"
+        // "at baseline" shortens the same way: the header supplies "baseline", the chip supplies the
+        // distance from it, which is none. No glyph, TrendChip showing one only for a signed value.
+        // Reached only with a real delta now, so it says "measured, and it is zero" rather than
+        // standing in for "nothing to measure".
+        deltaText = "±0"
         deltaColor = Palette.textTertiary
     }
     StatTile(
@@ -1218,10 +1296,15 @@ private fun MarkerTile(
         accent = accent,
         delta = deltaText,
         deltaColor = deltaColor,
-        // #492 item 5: on narrow two-column cards the intrinsic-width "vs base" chip used to consume
-        // nearly the whole row and leave the reading as "4…" / "73…". Share the row evenly so the real
-        // physiological value stays intact; the explanatory chip is the element allowed to ellipsize.
-        compactDelta = true,
+        // NO compactDelta, deliberately (#2145). #492 item 5 added it because the intrinsic-width
+        // "vs base" chip ate the row and left the reading as "4…", and an even split then starved
+        // BOTH sides on a two-up tile: "53 bpm" and "+7 vs base" each want more than half, so the
+        // field saw "53 …" beside "▲ +7 vs …". An even split cannot be the answer, because a weighted
+        // child with fill = true is held to exactly its share, so the value stays at half however
+        // little the chip needs. The chip is now the sign and at most three digits at 12sp, so it
+        // measures under 45dp including its pill padding, and the weighted value takes everything
+        // else. The old chip wanted about 90dp of a row that has about 140dp to give, which is what
+        // made it starve the reading in the first place.
     )
 }
 

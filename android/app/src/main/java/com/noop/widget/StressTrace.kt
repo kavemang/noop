@@ -1,6 +1,7 @@
 package com.noop.widget
 
 import com.noop.analytics.DaytimeStress
+import kotlin.math.roundToInt
 
 /**
  * One hour on the widget's stress trace.
@@ -45,11 +46,28 @@ object StressTrace {
      *  a malformed payload from growing the list without bound. */
     const val MAX_POINTS: Int = 26
 
-    /** `ts:level:moving`, comma separated, with `-` for an unscored hour. Compact enough for a prefs
-     *  string at a day's length, and readable in a bug report, which a binary blob would not be. */
+    /**
+     * `ts:level:moving`, comma separated, with `-` for an unscored hour. Compact enough for a prefs
+     * string at a day's length, and readable in a bug report, which a binary blob would not be.
+     *
+     * THE LEVEL IS WRITTEN LOSSLESSLY (#2166). This used to be `"%.2f"`, which made the snapshot a
+     * rounding step in front of a rounding: the widget printed a level that had been rounded to two
+     * decimals and then to one, while the Today card rounded the live double once. Two roundings move
+     * a value across a boundary one rounding does not, so a raw 2.2450 printed 2.3 on the widget and
+     * 2.2 on the card, on identical data with no staleness in it. Measured across the domain, the two
+     * disagreed by a tenth on 5% of levels, and the same skew reached the peak and average, which are
+     * folded from this series on one side and from live points on the other.
+     *
+     * `Double.toString` emits the shortest decimal that reads back as the same double, so decode
+     * returns the bits encode was handed and the widget formats exactly what the card formats. Any
+     * fixed precision would only have made the disagreement rarer, which is the thing #2167 objects
+     * to elsewhere. It costs a few hundred characters a day and it costs the digits their tidiness,
+     * a level reading 1.5851456074086638 rather than 1.59; read the first few and ignore the rest.
+     * It is also locale-independent, which `String.format` without a fixed locale was not.
+     */
     fun encode(series: List<StressPoint>): String =
         series.joinToString(",") { p ->
-            val level = p.level?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "-"
+            val level = p.level?.toString() ?: "-"
             "${p.ts}:$level:${if (p.moving) 1 else 0}"
         }
 
@@ -63,7 +81,11 @@ object StressTrace {
             if (bits.size != 3) continue
             val ts = bits[0].toLongOrNull() ?: continue
             val level = if (bits[1] == "-") null else bits[1].toDoubleOrNull() ?: continue
-            if (level != null && (level < 0.0 || level > DOMAIN_MAX)) continue
+            // Negated rather than written as the two out-of-range tests, so a NaN is skipped too.
+            // Every comparison against NaN is false, so `level < 0.0 || level > DOMAIN_MAX` admitted
+            // one, and "NaN" is text `toDoubleOrNull` accepts. Infinity was always caught, being
+            // greater than the ceiling.
+            if (level != null && !(level >= 0.0 && level <= DOMAIN_MAX)) continue
             out.add(StressPoint(ts, level, bits[2] == "1"))
         }
         out.sortBy { it.ts }
@@ -214,6 +236,34 @@ object StressTrace {
             }
         }
         return out
+    }
+
+    /**
+     * A 0-3 level as the one string every surface prints (#2164).
+     *
+     * There were two spellings. The widget used `String.format(Locale.getDefault(), "%.1f")`, which
+     * punctuates by locale, so a German reader saw `2,8`; the Today card built tenths by hand and always
+     * produced `2.8`, so one number appeared two ways on a screen and its own widget.
+     *
+     * The dot wins because the Apple surfaces already print it: Swift's `String(format:)` without a
+     * locale does not localise, so every stress figure in `StressWidget.swift` is dot-decimal. Matching
+     * the card and iOS settles the separator on all four surfaces without changing what any of them
+     * showed.
+     *
+     * ROUNDING IS ARITHMETIC, NOT `printf`, for the reason `SleepStagerTrace.round1` gives: Java rounds
+     * half up on the decimal expansion, C `printf` rounds half to even on the binary value, and a
+     * harness caught those disagreeing on a real number. So the card's spelling is the one kept here,
+     * and iOS stays on `String(format:)`. A logistic squash lands within an ulp of a .x5 boundary about
+     * never, so the two cannot be shown to differ on a real level, but the arithmetic side is the one
+     * this codebase has already settled on.
+     *
+     * Clamped to the domain, which the card did and the widget did not. `squash` should keep levels
+     * inside it already, so this is belt-and-braces rather than load-bearing; what matters is that both
+     * surfaces are braced the same way instead of disagreeing above the ceiling.
+     */
+    fun formatLevel(value: Double): String {
+        val tenths = (value * 10).roundToInt().coerceIn(0, (DOMAIN_MAX * 10).roundToInt())
+        return "${tenths / 10}.${tenths % 10}"
     }
 
     /**
