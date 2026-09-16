@@ -36,7 +36,36 @@ enum RescoreBackgroundScheduler {
     /// Seconds the last COMPLETED pass took. Only ever written by a pass that reached the end.
     static let lastPassSecondsKey = "noop.rescoreLastPassSeconds"
 
+    /// Identifies the MOST RECENT debt, so a pass can tell its own from someone else's (#1681).
+    ///
+    /// A token rather than a counter, deliberately. A counter needs read-modify-write, and two triggers
+    /// marking a debt at the same moment could both read N and both write N+1 — losing an increment, and
+    /// with it exactly the debt this is meant to protect. A fresh token is a single write: concurrent
+    /// marks each produce a distinct one, the last wins, and it cannot equal any pass's captured token.
+    static let owedTokenKey = "noop.rescoreOwedToken"
+
+    /// Whether the outstanding debt was left by a pass that COMPLETED but could not settle, as opposed to
+    /// one that was killed partway.
+    ///
+    /// #2238: the two are not the same question, and `isRescoreOwed` alone cannot tell them apart. A killed
+    /// pass deliberately never advanced `analyzeWatermarkKey`, so its resume must force. A pass that
+    /// completed and was merely out-voted by a newer token DID advance the watermark on its way out, so its
+    /// resume can ask the fingerprint whether anything actually changed and stand down when nothing did.
+    ///
+    /// Forcing both is what lets an Oura ring draining every 5 minutes re-score 21 nights back to back for
+    /// as long as the app is awake: each pass outlives its own debt, the resume forces a fresh one, and the
+    /// chain never reaches a quiet interval it can stop at.
+    static let owedAfterCompletedPassKey = "noop.rescoreOwedAfterCompletedPass"
+
     static var isRescoreOwed: Bool { UserDefaults.standard.bool(forKey: owedKey) }
+
+    /// True only while the outstanding debt came from a completed-but-unsettled pass. Cleared by the next
+    /// `markRescoreOwed()`, so a debt recorded by a pass that then dies reverts to forcing.
+    static var isOwedAfterCompletedPass: Bool {
+        UserDefaults.standard.bool(forKey: owedAfterCompletedPassKey)
+    }
+
+    static var currentOwedToken: String? { UserDefaults.standard.string(forKey: owedTokenKey) }
 
     static var lastCompletedPassSeconds: Double? {
         guard UserDefaults.standard.object(forKey: lastPassSecondsKey) != nil else { return nil }
@@ -47,17 +76,62 @@ enum RescoreBackgroundScheduler {
     /// Mark a re-score as owed. Called by `IntelligenceEngine` once a pass is past every gate and is
     /// definitely about to work — so that a kill leaves the debt behind — and by the deferral path, where
     /// no pass is attempted at all but the work is just as outstanding.
-    static func markRescoreOwed() {
+    /// Returns the token stamped on this debt. A pass keeps it and hands it back at completion; every
+    /// other caller (the deferral path) can ignore it, since it is not the one that will settle up.
+    @discardableResult
+    static func markRescoreOwed() -> String {
+        let token = UUID().uuidString
         UserDefaults.standard.set(true, forKey: owedKey)
+        UserDefaults.standard.set(token, forKey: owedTokenKey)
+        // A fresh debt is unproven until the pass that owns it finishes: if THIS pass is killed, the
+        // watermark never advances and its resume must force. Cleared here rather than at completion so
+        // the flag describes the CURRENT debt, never the previous one (#2238).
+        UserDefaults.standard.set(false, forKey: owedAfterCompletedPassKey)
+        return token
+    }
+
+    /// May a pass holding [capturedToken] settle the debt?
+    ///
+    /// Only if nothing newer was recorded while it ran. The bug in #1681 is that this question was never
+    /// asked: completion cleared one global boolean unconditionally, so a trigger firing mid-pass — for
+    /// data that arrived AFTER the pass had already read its inputs — had its debt erased before the
+    /// correction it was recorded for ever ran. The scoring loop starts at today, so the night most
+    /// likely to still be syncing is the first thing read and the likeliest to be caught mid-write.
+    ///
+    /// A pass with NO token never settles. That errs toward one extra pass, which costs battery; the
+    /// other direction costs a night's scores until something unrelated happens to re-score it, which is
+    /// the failure being fixed.
+    ///
+    /// Pure, so the rule is pinned without UserDefaults or a background task.
+    static func maySettleDebt(capturedToken: String?, currentToken: String?) -> Bool {
+        guard let capturedToken, !capturedToken.isEmpty else { return false }
+        return capturedToken == currentToken
     }
 
     /// Settle the debt at the end of a completed pass, beside the watermark advance. A pass that is
     /// killed never reaches this, which is what leaves the mark set for the next launch to find.
-    static func markRescoreCompleted(seconds: Double) {
-        UserDefaults.standard.set(false, forKey: owedKey)
+    /// [owedToken] is the token this pass received from its own `markRescoreOwed()`. The debt is settled
+    /// only if it is still the current one — see `maySettleDebt`. The pass duration is recorded either
+    /// way: it is telemetry about THIS pass, and true regardless of whose debt is now outstanding.
+    /// Returns whether the debt was actually settled, so the caller can SAY when it was not. Declining
+    /// is the interesting outcome and it must not be silent: #1538 cost three nights because the log
+    /// recorded that scoring had not happened without ever recording why, and a pass that completes
+    /// while leaving the mark set looks identical to one that cleared it unless something says so.
+    @discardableResult
+    static func markRescoreCompleted(seconds: Double, owedToken: String?) -> Bool {
+        let settled = maySettleDebt(capturedToken: owedToken, currentToken: currentOwedToken)
+        if settled {
+            UserDefaults.standard.set(false, forKey: owedKey)
+        } else {
+            // #2238: this pass finished and advanced the watermark; only a newer token outvoted it. Record
+            // that, so the resume can gate on the fingerprint instead of forcing a pass whose inputs may be
+            // byte-identical to the one that just ran.
+            UserDefaults.standard.set(true, forKey: owedAfterCompletedPassKey)
+        }
         if seconds.isFinite, seconds > 0 {
             UserDefaults.standard.set(seconds, forKey: lastPassSecondsKey)
         }
+        return settled
     }
 
     /// Whether the app is somewhere a long pass might not survive. Always false on macOS — see the type doc.

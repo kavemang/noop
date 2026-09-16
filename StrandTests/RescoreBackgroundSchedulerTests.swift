@@ -13,6 +13,8 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
 
     private var savedOwed: Any?
     private var savedSeconds: Any?
+    private var savedToken: Any?
+    private var savedAfterCompleted: Any?
 
     override func setUp() {
         super.setUp()
@@ -20,13 +22,20 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
         // restore rather than assume this suite owns them.
         savedOwed = UserDefaults.standard.object(forKey: RescoreBackgroundScheduler.owedKey)
         savedSeconds = UserDefaults.standard.object(forKey: RescoreBackgroundScheduler.lastPassSecondsKey)
+        savedToken = UserDefaults.standard.object(forKey: RescoreBackgroundScheduler.owedTokenKey)
+        savedAfterCompleted = UserDefaults.standard.object(
+            forKey: RescoreBackgroundScheduler.owedAfterCompletedPassKey)
         UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.owedKey)
         UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.lastPassSecondsKey)
+        UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.owedTokenKey)
+        UserDefaults.standard.removeObject(forKey: RescoreBackgroundScheduler.owedAfterCompletedPassKey)
     }
 
     override func tearDown() {
         restore(savedOwed, RescoreBackgroundScheduler.owedKey)
         restore(savedSeconds, RescoreBackgroundScheduler.lastPassSecondsKey)
+        restore(savedToken, RescoreBackgroundScheduler.owedTokenKey)
+        restore(savedAfterCompleted, RescoreBackgroundScheduler.owedAfterCompletedPassKey)
         super.tearDown()
     }
 
@@ -41,9 +50,9 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
     /// discover that an earlier one was killed — the killed process never gets to report anything itself.
     func testAStartedPassOwesUntilItCompletes() {
         XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
-        RescoreBackgroundScheduler.markRescoreOwed()
+        let token = RescoreBackgroundScheduler.markRescoreOwed()
         XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 12)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 12, owedToken: token)
         XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
     }
 
@@ -51,10 +60,10 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
     /// whether a background wake can finish the work, so a garbage value must read as "no measurement"
     /// rather than as a number.
     func testOnlyAUsableDurationIsBanked() {
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778, owedToken: nil)   // fixture: bank a duration, settle nothing
         XCTAssertEqual(RescoreBackgroundScheduler.lastCompletedPassSeconds ?? 0, 474.778, accuracy: 0.001)
 
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: .nan)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: .nan, owedToken: nil)   // fixture: bank a duration, settle nothing
         XCTAssertEqual(RescoreBackgroundScheduler.lastCompletedPassSeconds ?? 0, 474.778, accuracy: 0.001,
                        "a NaN must not overwrite a good measurement")
 
@@ -68,7 +77,7 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
     /// to has nothing to find.
     func testDeferringMarksTheWorkOwedAndDoesNotRunIt() async {
         // A measured pass far over the background budget, so the policy defers.
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778, owedToken: nil)   // fixture: bank a duration, settle nothing
         XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
 
         var ran = false
@@ -88,7 +97,7 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
     /// A foregrounded pass runs, whatever the measurement says. This is the case the mechanism must not
     /// break: there is no suspension deadline, so deferring would be a pure regression.
     func testAForegroundPassRunsEvenWhenSlow() async {
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778, owedToken: nil)   // fixture: bank a duration, settle nothing
 
         var ran = false
         var logged: [String] = []
@@ -125,7 +134,7 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
     /// run here is simply skipped. Recording a debt for it would send a processing task off to run a
     /// forced full pass when most likely nothing changed — the churn #1146 exists to avoid.
     func testASkippedBackstopDoesNotConjureADebt() async {
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 474.778, owedToken: nil)   // fixture: bank a duration, settle nothing
 
         var ran = false
         var logged: [String] = []
@@ -160,9 +169,138 @@ final class RescoreBackgroundSchedulerTests: XCTestCase {
         XCTAssertTrue(foreground)
 
         var affordable = false
-        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 3)
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 3, owedToken: nil)   // fixture: bank a duration, settle nothing
         await RescoreBackgroundScheduler.run(isBackground: true, owesOnDefer: false,
                                              log: { _ in }) { affordable = true }
         XCTAssertTrue(affordable)
     }
+
+    // MARK: - #1681: whose debt is it?
+
+    /// The reported bug. A pass records its debt, and while it is running a LATER trigger records another
+    /// — for data that arrived after this pass had already read its inputs. Completion used to clear one
+    /// global boolean unconditionally, erasing that newer debt before the correction it was recorded for
+    /// ever ran. The night stayed scored from a partial sync until something unrelated happened to
+    /// re-score it.
+
+    // MARK: - #2238: a debt from a COMPLETED pass is not the same as one from an interrupted pass
+
+    /// The distinction the Oura re-score storm turns on. A pass that finishes and is outvoted by a token
+    /// recorded mid-pass HAS advanced the watermark, so its resume may ask the fingerprint whether anything
+    /// changed. A pass that dies has not, so its resume must force.
+    func testACompletedButUnsettledPassMarksItsDebtAsProven() {
+        let mine = RescoreBackgroundScheduler.markRescoreOwed()
+        XCTAssertFalse(RescoreBackgroundScheduler.isOwedAfterCompletedPass,
+                       "a debt is unproven until the pass owning it finishes")
+
+        _ = RescoreBackgroundScheduler.markRescoreOwed()   // a newer trigger lands mid-pass
+        let settled = RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: mine)
+
+        XCTAssertFalse(settled, "an outvoted pass must not settle the debt (#1681)")
+        XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
+        XCTAssertTrue(RescoreBackgroundScheduler.isOwedAfterCompletedPass,
+                      "#2238: this pass completed and advanced the watermark, so the resume may gate")
+    }
+
+    /// A pass that never reaches completion leaves the flag where `markRescoreOwed` put it: false. The
+    /// resume then forces, which is the behaviour #1538 relies on.
+    func testAnInterruptedPassLeavesItsDebtUnproven() {
+        _ = RescoreBackgroundScheduler.markRescoreOwed()
+        // no markRescoreCompleted: the process died here
+
+        XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed)
+        XCTAssertFalse(RescoreBackgroundScheduler.isOwedAfterCompletedPass,
+                       "#2238: an interrupted pass never advanced the watermark, so its resume must force")
+    }
+
+    /// The flag describes the CURRENT debt. A resume that starts its own pass and is then killed must not
+    /// inherit the previous debt's proof, or the chain would gate on a watermark that was never advanced.
+    func testAFreshDebtClearsThePreviousProof() {
+        let first = RescoreBackgroundScheduler.markRescoreOwed()
+        _ = RescoreBackgroundScheduler.markRescoreOwed()
+        _ = RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: first)
+        XCTAssertTrue(RescoreBackgroundScheduler.isOwedAfterCompletedPass)
+
+        _ = RescoreBackgroundScheduler.markRescoreOwed()   // the resume's own pass starts, then dies
+
+        XCTAssertFalse(RescoreBackgroundScheduler.isOwedAfterCompletedPass,
+                       "#2238: proof belongs to the debt that earned it, not to whatever is owed next")
+    }
+
+    /// A settled pass clears the debt outright, so the flag is moot; pinned so a later change cannot leave
+    /// a stale proof behind a cleared debt.
+    func testASettledPassLeavesNoOutstandingProof() {
+        let mine = RescoreBackgroundScheduler.markRescoreOwed()
+        let settled = RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: mine)
+
+        XCTAssertTrue(settled)
+        XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
+        XCTAssertFalse(RescoreBackgroundScheduler.isOwedAfterCompletedPass)
+    }
+
+    func testADebtRecordedMidPassSurvivesThatPassCompleting() {
+        let mine = RescoreBackgroundScheduler.markRescoreOwed()
+        _ = RescoreBackgroundScheduler.markRescoreOwed()   // a later trigger, while the pass is still running
+
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 9, owedToken: mine)
+
+        XCTAssertTrue(RescoreBackgroundScheduler.isRescoreOwed,
+                      "the newer debt must outlive the pass that did not pay it")
+    }
+
+    /// …and the pass that DOES hold the current token still settles, or the flag would never clear and
+    /// every launch would re-score forever.
+    func testTheHolderOfTheCurrentTokenSettles() {
+        _ = RescoreBackgroundScheduler.markRescoreOwed()
+        let latest = RescoreBackgroundScheduler.markRescoreOwed()
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 9, owedToken: latest)
+        XCTAssertFalse(RescoreBackgroundScheduler.isRescoreOwed)
+    }
+
+    /// The duration is telemetry about THIS pass and is banked either way — it is true regardless of
+    /// whose debt is now outstanding, and the policy needs it to size a background wake.
+    func testAPassThatCannotSettleStillBanksItsDuration() {
+        let mine = RescoreBackgroundScheduler.markRescoreOwed()
+        _ = RescoreBackgroundScheduler.markRescoreOwed()
+        RescoreBackgroundScheduler.markRescoreCompleted(seconds: 33.5, owedToken: mine)
+        XCTAssertEqual(RescoreBackgroundScheduler.lastCompletedPassSeconds ?? 0, 33.5, accuracy: 0.001)
+    }
+
+    // MARK: - the settlement rule itself
+
+    /// A pass with NO token never settles. That costs one extra pass; the other direction costs a night's
+    /// scores until something unrelated re-scores it, which is the failure being fixed.
+    func testNoTokenNeverSettles() {
+        XCTAssertFalse(RescoreBackgroundScheduler.maySettleDebt(capturedToken: nil, currentToken: "a"))
+        XCTAssertFalse(RescoreBackgroundScheduler.maySettleDebt(capturedToken: "", currentToken: ""))
+    }
+
+    func testOnlyTheCurrentTokenSettles() {
+        XCTAssertTrue(RescoreBackgroundScheduler.maySettleDebt(capturedToken: "a", currentToken: "a"))
+        XCTAssertFalse(RescoreBackgroundScheduler.maySettleDebt(capturedToken: "a", currentToken: "b"))
+        XCTAssertFalse(RescoreBackgroundScheduler.maySettleDebt(capturedToken: "a", currentToken: nil))
+    }
+
+    /// Each mark stamps a DISTINCT token. A counter would need read-modify-write, and two triggers marking
+    /// at the same moment could both read N and both write N+1 — losing exactly the debt this protects.
+    func testEveryMarkStampsADistinctToken() {
+        let seen = Set((0..<50).map { _ in RescoreBackgroundScheduler.markRescoreOwed() })
+        XCTAssertEqual(seen.count, 50)
+    }
+
+    // MARK: - the outcome has to be reportable
+
+    /// Declining is the interesting outcome, and the caller can only SAY so if it is told. #1538 cost
+    /// three nights because the log recorded that scoring had not happened without recording why; a pass
+    /// that completes while leaving the mark set looks identical in a capture to one that cleared it.
+    func testCompletionReportsWhetherItSettled() {
+        let mine = RescoreBackgroundScheduler.markRescoreOwed()
+        _ = RescoreBackgroundScheduler.markRescoreOwed()
+        XCTAssertFalse(RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: mine),
+                       "a pass that could not settle must report that, or the log cannot explain itself")
+
+        let latest = RescoreBackgroundScheduler.markRescoreOwed()
+        XCTAssertTrue(RescoreBackgroundScheduler.markRescoreCompleted(seconds: 1, owedToken: latest))
+    }
 }
+

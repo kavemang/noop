@@ -96,6 +96,7 @@ ANDROID_INDIRECT_NON_UI_LITERALS = {
     "today.keyMetricsWindowDays", ",",
     # Stable DashboardCard raw values + preference; units remain measurement metadata.
     "stress", "fitnessAge", "vo2max", "vitality", "skinTemp", "sleep", "hydration", "coupled",
+    "coach", "stepsAverage30",
     "today.dashboardCards", "yrs", "kcal", "",
 }
 
@@ -361,14 +362,21 @@ class HomeLocalizationTest(unittest.TestCase):
         for relative in ANDROID_HOME_FILES:
             used.update(_android_resource_names(ROOT / relative))
 
-        paths = {"en": ROOT / "android/app/src/main/res/values/strings.xml"}
+        paths = {"en": ROOT / "android/app/src/main/res/values"}
         paths.update({
-            lang: ROOT / f"android/app/src/main/res/{directory}/strings.xml"
+            lang: ROOT / f"android/app/src/main/res/{directory}"
             for lang, directory in audit.ANDROID_LOCALE_DIRS.items()
         })
         missing: list[str] = []
-        for lang, path in paths.items():
-            names = {node.attrib["name"] for node in ET.parse(path).getroot() if node.tag in {"string", "plurals"}}
+        for lang, directory in paths.items():
+            # Android merges every values XML file, including feature-specific resources.
+            # Inspect each locale independently so English fallback cannot hide missing copy.
+            names = {
+                node.attrib["name"]
+                for path in sorted(directory.glob("*.xml"))
+                for node in ET.parse(path).getroot()
+                if node.tag in {"string", "plurals"}
+            }
             missing.extend(f"{lang}: {name}" for name in sorted(used - names))
         self.assertEqual([], missing, "Missing Android Home resources:\n" + "\n".join(missing))
 
@@ -505,7 +513,9 @@ class HomeLocalizationTest(unittest.TestCase):
         self.assertNotIn('result.copy.contains("numbers agree")', (ROOT / "Strand/Screens/SkinTempCardsView.swift").read_text(encoding="utf-8"))
         self.assertIn('String(localized: "RHR +\\(delta)")', app_model)
         self.assertIn('String(localized: "HRV −\\(percent)%")', app_model)
-        self.assertIn('String(localized: "Skin temperature +\\(temperature) °C")', app_model)
+        # 240c48ae (#1671): the label now carries the reader's unit via UnitFormatter.skinTempSignalPhrase,
+        # so the sign and the hardcoded °C moved out of the localized literal.
+        self.assertIn('String(localized: "Skin temperature \\(temperature)")', app_model)
         self.assertIn('String(localized: "Respiration up")', app_model)
 
         self.assertIn("public enum Evidence", readiness)
@@ -521,7 +531,7 @@ class HomeLocalizationTest(unittest.TestCase):
 
         strings = audit.load_catalog(ROOT / "Strand/Resources/Localizable.xcstrings")["strings"]
         for key in (
-            "RHR +%lld", "HRV −%lld%%", "Skin temperature +%@ °C", "Respiration up",
+            "RHR +%lld", "HRV −%lld%%", "Skin temperature %@", "Respiration up",
             "%@ vs %@ %@", "7d %@ / 28d %@", "monotony %@",
         ):
             self.assertIn(key, strings)

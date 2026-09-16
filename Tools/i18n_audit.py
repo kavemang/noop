@@ -435,7 +435,7 @@ def scan_android() -> list[tuple[str, int, str]]:
                         continue
                     seen.add(offset)
                     line_no = text.count("\n", 0, offset) + 1
-                    findings.append((str(path.relative_to(ROOT)), line_no, literal))
+                    findings.append((path.relative_to(ROOT).as_posix(), line_no, literal))
 
             # The call's own first (content) argument only — catches
             # `Text(if (x) "a" else "b")` — never the whole call span, which
@@ -502,6 +502,32 @@ def android_strings_xml_gaps() -> dict[str, set[str]]:
         if missing:
             gaps[lang] = missing
     return gaps
+
+
+ANDROID_STRING_PATTERN = re.compile(r'<string name="([^"]+)"[^>]*>(.*?)</string>', re.S)
+
+
+def android_edge_whitespace() -> dict[str, list[str]]:
+    """Resource keys whose value starts or ends in whitespace, per locale directory.
+
+    AAPT2 trims leading and trailing whitespace from an unquoted string resource, so that
+    whitespace never reaches the device. Copy that leans on it renders two words run together
+    (the caption that read "scoredagainst your own calm hours today"). A resource that really
+    does need an edge space has to be wrapped in double quotes, which this check honours; the
+    reliable fix for a split sentence is to keep the joining space in the code instead.
+    """
+    out: dict[str, list[str]] = {}
+    for path in sorted((ROOT / "android/app/src/main/res").glob("values*/strings.xml")):
+        offenders = [
+            key
+            for key, value in (
+                (m.group(1), m.group(2)) for m in ANDROID_STRING_PATTERN.finditer(path.read_text(encoding="utf-8"))
+            )
+            if value != value.strip() and not value.strip().startswith('"')
+        ]
+        if offenders:
+            out[path.parent.name] = offenders
+    return out
 
 
 ANDROID_FORMAT_PATTERN = re.compile(r"%[1-9]\d*\$[-+0 #,(]*\d*(?:\.\d+)?([sdif])")
@@ -826,7 +852,14 @@ def apple_format_gaps(cat: dict, lang: str) -> list[str]:
         # Compare EVERY form independently against the key, never a folded concatenation: folding would
         # make the signature depend on how many plural categories the language HAS (ru/pl carry four,
         # zh one), so a correct translation would read as a format mismatch purely for having more forms.
-        values = [u.get("value", "") for u in _string_units(entry, lang)] or [""]
+        # An ABSENT localization is a coverage gap, reported by the missing/allowance counters, and
+        # must not be read as a format mismatch. `or [""]` used to make one look like the other: the
+        # empty signature differs from any key carrying a specifier. That never showed for the focus
+        # languages, which are held at zero missing, and it turned every ratcheted gap in it/ru/pl
+        # into a false format failure the moment this check was widened past them.
+        values = [u.get("value", "") for u in _string_units(entry, lang)]
+        if not values:
+            continue
         if any(signature(key) != signature(v) for v in values):
             mismatched.append(key)
     return mismatched
@@ -856,7 +889,7 @@ def scan_ios() -> tuple[list[tuple[str, int, str]], dict[str, list[str]]]:
                         continue
                     entry = swift_catalog_lookup(cat, literal)
                     line_no = text.count("\n", 0, offset) + 1
-                    rel = str(path.relative_to(ROOT))
+                    rel = path.relative_to(ROOT).as_posix()
                     if entry is None:
                         hardcoded.append((rel, line_no, literal))
                         continue
@@ -864,7 +897,7 @@ def scan_ios() -> tuple[list[tuple[str, int, str]], dict[str, list[str]]]:
                         continue
                     for lang in LANGS:
                         if not _is_translated(entry, lang):
-                            lang_gaps[lang].append(f"{catalog_path.relative_to(ROOT)} :: {literal!r}")
+                            lang_gaps[lang].append(f"{catalog_path.relative_to(ROOT).as_posix()} :: {literal!r}")
     for lang in lang_gaps:
         lang_gaps[lang] = sorted(set(lang_gaps[lang]))
     return hardcoded, lang_gaps
@@ -926,13 +959,33 @@ ECHO_BASELINE_PATH = ROOT / "Tools/i18n_echo_baseline.txt"
 FORMAT_SPECIFIER_PATTERN = re.compile(r"%(?:\d+\$)?[@#0\-+ ]*[\d.]*(?:ll|l|h)?[@dfsu]|%%")
 
 
+# Multi-word product names that travel verbatim into Latin-script locales. The two-word floor below
+# already lets a ONE-word brand through ("HRV", "Strava"); it cannot see a two-word one, so "iCloud
+# Drive" repeated verbatim in German reads as an untranslated echo when it is the correct rendering.
+# Only strings that are ENTIRELY brand are exempted (see `_is_pure_brand_phrase`), so "Apple Health
+# sync" stays gated on its translatable word. CJK locales that DO translate these are unaffected —
+# they differ from the source, so they were never counted as echoes in the first place.
+BRAND_PHRASES = ("iCloud Drive",)
+
+
+def _is_pure_brand_phrase(text: str) -> bool:
+    """Whether a string is nothing but brand names, placeholders and punctuation."""
+    stripped = FORMAT_SPECIFIER_PATTERN.sub(" ", text)
+    for brand in BRAND_PHRASES:
+        stripped = stripped.replace(brand, " ")
+    return not re.search(r"[^\W\d_]{2,}", stripped, flags=re.UNICODE)
+
+
 def _has_translatable_words(text: str) -> bool:
     """Whether a string carries enough real words that an identical translation is suspicious.
 
     Strips format specifiers first: "%@ · n = %lld" / "%1$s: %2$s" are placeholders and punctuation
     with nothing to translate, so a locale repeating them verbatim is CORRECT, not a gap. Two words is
     the floor — one word is very often a term that legitimately travels ("HRV", "Yoga", a brand name).
+    A string that is entirely a multi-word brand is the same case one size up (see [BRAND_PHRASES]).
     """
+    if _is_pure_brand_phrase(text):
+        return False
     stripped = FORMAT_SPECIFIER_PATTERN.sub(" ", text)
     return len(re.findall(r"[^\W\d_]{2,}", stripped, flags=re.UNICODE)) >= 2
 
@@ -948,7 +1001,7 @@ def _ios_echoed_counts() -> dict[str, int]:
             cat = json.loads(catalog_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        rel = str(catalog_path.relative_to(ROOT))
+        rel = catalog_path.relative_to(ROOT).as_posix()
         for key, entry in (cat.get("strings") or {}).items():
             if not _has_translatable_words(key):
                 continue
@@ -984,7 +1037,7 @@ def _android_echoed_counts() -> dict[str, int]:
             loc = {n.attrib["name"]: (n.text or "") for n in ET.parse(path).getroot().findall("string")}
         except ET.ParseError:
             continue
-        rel = str(path.relative_to(ROOT))
+        rel = path.relative_to(ROOT).as_posix()
         n = sum(1 for k, base_val in translatable.items() if loc.get(k) == base_val)
         if n:
             counts[f"{rel} {lang}"] = n
@@ -1104,6 +1157,15 @@ def ci_check(base_ref: str) -> int:
             locale_dir = ANDROID_LOCALE_DIRS[lang]
             print(f"FAIL {locale_dir}/strings.xml has {len(format_gaps)} format mismatch(es): {format_gaps[:30]}")
 
+    edge = android_edge_whitespace()
+    if edge:
+        failed = True
+        for locale_dir, keys in edge.items():
+            print(f"FAIL {locale_dir}/strings.xml has {len(keys)} string(s) whose edge whitespace "
+                  f"AAPT2 strips: {sorted(keys)[:30]}")
+    else:
+        print("  OK no string resource leans on edge whitespace")
+
     print("\n--- Apple: no NEW un-extracted UI copy, and complete focus locales ---")
     ios_literals, _source_gaps = scan_ios()
     ios_found = {(p, lit) for p, _line, lit in ios_literals}
@@ -1126,10 +1188,22 @@ def ci_check(base_ref: str) -> int:
         # and gate them below. Reloading each catalog for a second pass wasted a full re-parse of a
         # 3255-string file.
         for extra in sorted(shipped_apple_langs(cat) - set(LANGS)):
-            extra_apple_gaps[f"{catalog_path.relative_to(ROOT)}:{extra}"] = sum(
+            extra_apple_gaps[f"{catalog_path.relative_to(ROOT).as_posix()}:{extra}"] = sum(
                 1 for v in cat.get("strings", {}).values()
                 if v.get("shouldTranslate") is not False and not _is_translated(v, extra)
             )
+            # COVERAGE for these locales is ratcheted, because they carry inherited gaps that would
+            # red-check every open PR. FORMAT is not: a specifier the translation drops or invents is
+            # a runtime substitution bug, not a gap, and it is exactly as broken in Russian as in
+            # German. Checking it only for LANGS left zh, it, ru and pl free to ship a dropped `%@`
+            # through a green board, which is how `%lld app%@ on` and `%lld frame%@ captured this
+            # session.` kept a Russian mismatch each for as long as they existed. Zero tolerance
+            # here is affordable because the count across every catalogue and every locale is now 0.
+            extra_format_gaps = apple_format_gaps(cat, extra)
+            if extra_format_gaps:
+                failed = True
+                print(f"FAIL {catalog_path.relative_to(ROOT)} {extra}: "
+                      f"{len(extra_format_gaps)} format mismatch(es): {extra_format_gaps[:10]}")
         for lang in LANGS:
             missing = sum(
                 1 for v in cat.get("strings", {}).values()
@@ -1234,8 +1308,16 @@ def catalog_summary() -> None:
             for v in strings.values():
                 if v.get("shouldTranslate") is False:
                     continue
-                state = (v.get("localizations", {}).get(lang) or {}).get("stringUnit", {}).get("state")
-                if state != "translated":
+                # Via `_is_translated`, NOT a bare `localizations[lang].stringUnit.state` read: a
+                # pluralised entry keeps its units under `variations.plural.<category>.stringUnit`, so the
+                # flat lookup returns None and scores a fully-translated plural as a gap. That is the exact
+                # trap `_string_units` was written for, and this summary was the one caller still falling
+                # into it — reporting de/es/fr/pt-PT missing=4 and pl missing=5 on the Strand catalog when
+                # every one of those entries was translated in every form. Worse than a wrong number: it
+                # sent a reader to re-translate strings that were already done, and it made Polish look
+                # like the worst-covered language precisely BECAUSE it correctly carries one/few/many/other
+                # where the others need only a flat unit.
+                if not _is_translated(v, lang):
                     missing += 1
             line += f"  {lang} missing={missing}"
         print(" ", line)
@@ -1268,6 +1350,16 @@ def main() -> int:
                 print(f"  {rel}:{line_no}: {literal!r}")
             if len(findings) > 25:
                 print(f"  ... and {len(findings) - 25} more (use --full)")
+
+        print("\n=== Android: string resources leaning on stripped edge whitespace ===")
+        edge = android_edge_whitespace()
+        if not edge:
+            print("  none")
+        for locale_dir, keys in edge.items():
+            print(f"  {locale_dir}: {len(keys)} string(s)")
+            if args.full:
+                for k in sorted(keys):
+                    print(f"    {k}")
 
         print("\n=== Android: values-<locale>/strings.xml key gaps ===")
         gaps = android_strings_xml_gaps()

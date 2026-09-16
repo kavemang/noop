@@ -158,6 +158,11 @@ final class SourceCoordinator: ObservableObject {
     ///   • WHOOP active after a strap → stop the strap source + resume WHOOP.
     ///   • A generic strap → pause WHOOP + (re)start `StandardHRSource` for that strap's id.
     func activeDeviceChanged(to id: String) {
+        // #2208: publish whose device this is BEFORE any branch returns. Readouts that show the strap's
+        // charge need it to know the number is not the active device's, and the Apple Watch path below
+        // short-circuits, so setting it inside the WHOOP/strap split would leave a watch reading `true`.
+        live.activeIsWhoop = isWhoop(id)
+
         // The Apple Watch is a HealthKit source with `peripheralId: nil` (see `AppleWatchDevice`): there is
         // no BLE peripheral to connect, and the M1 live read happens entirely in `HealthKitBridge`'s
         // observers + sync, off this BLE coordinator. Short-circuit BEFORE the WHOOP branch so we never
@@ -588,7 +593,9 @@ final class SourceCoordinator: ObservableObject {
     }
 
     /// A device is WHOOP when its brand is "WHOOP" (the seeded `my-whoop` row's brand).
-    static func isWhoop(_ device: PairedDevice) -> Bool {
-        device.id == "my-whoop" || device.brand.caseInsensitiveCompare("WHOOP") == .orderedSame
-    }
+    ///
+    /// #1881 gave the BLE engine the same question to answer, so the rule now lives in ONE place
+    /// (`SourceIdentity`, beside `PairedDevice`) and this delegates. Two spellings of "is this a WHOOP"
+    /// that could disagree is precisely how a strap's samples end up filed under a ring.
+    static func isWhoop(_ device: PairedDevice) -> Bool { SourceIdentity.isWhoop(device) }
 }
