@@ -439,6 +439,7 @@ struct LiquidTodayView: View {
         // hydrationSeq joins the id so logging a drink re-reads the card immediately, the same trigger set
         // classic TodayView's reloadHydration() uses.
         .task(id: "\(repo.refreshSeq)-\(selectedDayOffset)-\(repo.hydrationSeq)-\(hydrationEnabled)-\(dayCycleModeRaw)") {
+            DashboardCardPrefs.migrateLegacyStepsAverage()
             await load()
         }
         .sheet(item: $guideSection) { section in
@@ -947,6 +948,8 @@ struct LiquidTodayView: View {
     @ViewBuilder
     private func liquidCard(for card: DashboardCard) -> some View {
         switch card {
+        case .stepsAverage30:
+            RollingStepsAverageCard(day: selectedDayKey)
         case .stress:
             cardLink(.stress, title: card.title, sub: card.subtitle,
                      value: stressText, tint: StrandPalette.accent, frac: fracOver(stress, 3))

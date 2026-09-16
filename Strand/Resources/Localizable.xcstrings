@@ -13,6 +13,41 @@
     "The line is each waking hour's 0-3 proxy, scored against your personal daytime baseline (how your own days usually run). The bar below splits your day into calm, moderate and high stress time.": { "localizations": {
       "de": {"stringUnit": {"state": "translated", "value": "Die Linie zeigt den 0–3-Näherungswert jeder Wachstunde, bewertet anhand deiner persönlichen Tages-Baseline (wie deine Tage normalerweise verlaufen). Der Balken darunter teilt deinen Tag in ruhige, mäßige und hohe Stresszeiten."}}, "es": {"stringUnit": {"state": "translated", "value": "La línea muestra el indicador de 0 a 3 de cada hora de vigilia, comparado con tu referencia diurna personal (cómo suelen transcurrir tus días). La barra inferior divide el día en periodos de estrés bajo, moderado y alto."}}, "fr": {"stringUnit": {"state": "translated", "value": "La ligne représente l'indice 0–3 de chaque heure éveillée, évalué par rapport à votre référence diurne personnelle (le déroulement habituel de vos journées). La barre ci-dessous répartit votre journée en périodes de stress faible, modéré et élevé."}}, "it": {"stringUnit": {"state": "translated", "value": "La linea mostra l'indicatore da 0 a 3 per ogni ora di veglia, valutato rispetto al tuo riferimento diurno personale (l'andamento abituale delle tue giornate). La barra sottostante divide la giornata in periodi di stress basso, moderato e alto."}}, "pl": {"stringUnit": {"state": "translated", "value": "Linia pokazuje wskaźnik 0–3 dla każdej godziny czuwania, oceniany względem Twojej osobistej dziennej linii bazowej (typowego przebiegu Twoich dni). Pasek poniżej dzieli dzień na okresy niskiego, umiarkowanego i wysokiego stresu."}}, "pt-PT": {"stringUnit": {"state": "translated", "value": "A linha mostra o indicador de 0–3 de cada hora de vigília, avaliado em relação à tua linha de base diurna pessoal (como os teus dias costumam decorrer). A barra abaixo divide o teu dia em períodos de stress baixo, moderado e elevado."}}, "ru": {"stringUnit": {"state": "translated", "value": "Линия показывает показатель 0–3 за каждый час бодрствования относительно вашей личной дневной нормы (обычного хода ваших дней). Полоса ниже делит день на периоды низкого, умеренного и высокого стресса."}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "折线显示每个清醒小时的 0–3 指标，并以你的个人日间基线（你平时一天的状态）为基准评分。下方的条形将你的一天划分为低、中、高压力时段。"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "折線顯示每個清醒小時的 0–3 指標，並以你的個人日間基線（你平時一天的狀態）為基準評分。下方的長條將你的一天劃分為低、中、高壓力時段。"}}
     } },
+    "Close coach settings": { "localizations": {
+      "de": {"stringUnit": {"state": "translated", "value": "Coach-Einstellungen schließen"}}, "en": {"stringUnit": {"state": "translated", "value": "Close coach settings"}}, "es": {"stringUnit": {"state": "translated", "value": "Cerrar los ajustes del coach"}}, "fr": {"stringUnit": {"state": "translated", "value": "Fermer les réglages du coach"}}, "it": {"stringUnit": {"state": "translated", "value": "Chiudi le impostazioni del coach"}}, "pl": {"stringUnit": {"state": "translated", "value": "Zamknij ustawienia trenera"}}, "pt-PT": {"stringUnit": {"state": "translated", "value": "Fechar as definições do coach"}}, "ru": {"stringUnit": {"state": "translated", "value": "Закрыть настройки тренера"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "关闭教练设置"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "關閉教練設定"}}
+    } },
+    "Coach settings": { "localizations": {
+      "de": {"stringUnit": {"state": "translated", "value": "Coach-Einstellungen"}}, "en": {"stringUnit": {"state": "translated", "value": "Coach settings"}}, "es": {"stringUnit": {"state": "translated", "value": "Ajustes del coach"}}, "fr": {"stringUnit": {"state": "translated", "value": "Réglages du coach"}}, "it": {"stringUnit": {"state": "translated", "value": "Impostazioni del coach"}}, "pl": {"stringUnit": {"state": "translated", "value": "Ustawienia trenera"}}, "pt-PT": {"stringUnit": {"state": "translated", "value": "Definições do coach"}}, "ru": {"stringUnit": {"state": "translated", "value": "Настройки тренера"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "教练设置"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "教練設定"}}
+    } },
+    "What the coach may read, how it is told to answer, and when it writes to you.": { "localizations": {
+      "de": {"stringUnit": {"state": "translated", "value": "Worauf der Coach zugreifen darf, wie er antworten soll und wann er dir schreibt."}}, "en": {"stringUnit": {"state": "translated", "value": "What the coach may read, how it is told to answer, and when it writes to you."}}, "es": {"stringUnit": {"state": "translated", "value": "Qué puede leer el coach, cómo se le indica que responda y cuándo te escribe."}}, "fr": {"stringUnit": {"state": "translated", "value": "Ce que le coach peut lire, comment il doit répondre et quand il vous écrit."}}, "it": {"stringUnit": {"state": "translated", "value": "Cosa può leggere il coach, come deve rispondere e quando ti scrive."}}, "pl": {"stringUnit": {"state": "translated", "value": "Co trener może odczytywać, jak ma odpowiadać i kiedy pisze do Ciebie."}}, "pt-PT": {"stringUnit": {"state": "translated", "value": "O que o coach pode ler, como lhe é pedido que responda e quando te escreve."}}, "ru": {"stringUnit": {"state": "translated", "value": "Что тренер может читать, как ему отвечать и когда он вам пишет."}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "教练可以读取哪些数据、如何作答，以及何时向你发送消息。"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "教練可以讀取哪些資料、如何作答，以及何時向你傳送訊息。"}}
+    } },
+    "3 weeks": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"3 Wochen"}},"es":{"stringUnit":{"state":"translated","value":"3 semanas"}},"fr":{"stringUnit":{"state":"translated","value":"3 semaines"}},"pt-PT":{"stringUnit":{"state":"translated","value":"3 semanas"}},"pl":{"stringUnit":{"state":"translated","value":"3 tygodnie"}},"ru":{"stringUnit":{"state":"translated","value":"3 недели"}},"it":{"stringUnit":{"state":"translated","value":"3 settimane"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"3 周"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"3 週"}}}},
+    "sparse, widened to %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"wenige Daten, erweitert auf %@"}},"es":{"stringUnit":{"state":"translated","value":"pocos datos, ampliado a %@"}},"fr":{"stringUnit":{"state":"translated","value":"peu de données, période étendue à %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"poucos dados, alargado para %@"}},"pl":{"stringUnit":{"state":"translated","value":"mało danych, rozszerzono do %@"}},"ru":{"stringUnit":{"state":"translated","value":"мало данных, период расширен до %@"}},"it":{"stringUnit":{"state":"translated","value":"pochi dati, periodo esteso a %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"数据较少，已扩展至 %@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"資料較少，已擴展至 %@"}}}},
+    "30-day step average": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"30-Tage-Schrittedurchschnitt"}},"es":{"stringUnit":{"state":"translated","value":"Promedio de pasos de 30 días"}},"fr":{"stringUnit":{"state":"translated","value":"Moyenne des pas sur 30 jours"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Média de passos de 30 dias"}},"pl":{"stringUnit":{"state":"translated","value":"Średnia kroków z 30 dni"}},"ru":{"stringUnit":{"state":"translated","value":"Среднее число шагов за 30 дней"}},"it":{"stringUnit":{"state":"translated","value":"Media dei passi su 30 giorni"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"30 天平均步数"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"30 天平均步數"}}}},
+    "Rolling average over the last 30 days": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Fließender Durchschnitt der letzten 30 Tage"}},"es":{"stringUnit":{"state":"translated","value":"Promedio móvil de los últimos 30 días"}},"fr":{"stringUnit":{"state":"translated","value":"Moyenne glissante sur les 30 derniers jours"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Média móvel dos últimos 30 dias"}},"pl":{"stringUnit":{"state":"translated","value":"Średnia krocząca z ostatnich 30 dni"}},"ru":{"stringUnit":{"state":"translated","value":"Скользящее среднее за последние 30 дней"}},"it":{"stringUnit":{"state":"translated","value":"Media mobile degli ultimi 30 giorni"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"最近 30 天的滚动平均值"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"最近 30 天的移動平均值"}}}},
+    "%lld of 30 days": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%lld von 30 Tagen"}},"es":{"stringUnit":{"state":"translated","value":"%lld de 30 días"}},"fr":{"stringUnit":{"state":"translated","value":"%lld jours sur 30"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld de 30 dias"}},"pl":{"stringUnit":{"state":"translated","value":"Liczba dni: %lld z 30"}},"ru":{"stringUnit":{"state":"translated","value":"Дней: %lld из 30"}},"it":{"stringUnit":{"state":"translated","value":"%lld giorni su 30"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"30 天中的 %lld 天"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"30 天中的 %lld 天"}}}},
+    "Historical trend": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Historischer Verlauf"}},"es":{"stringUnit":{"state":"translated","value":"Tendencia histórica"}},"fr":{"stringUnit":{"state":"translated","value":"Évolution historique"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Tendência histórica"}},"pl":{"stringUnit":{"state":"translated","value":"Trend historyczny"}},"ru":{"stringUnit":{"state":"translated","value":"История изменений"}},"it":{"stringUnit":{"state":"translated","value":"Andamento storico"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"历史趋势"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"歷史趨勢"}}}},
+    "bar": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Balken"}},"es":{"stringUnit":{"state":"translated","value":"barra"}},"fr":{"stringUnit":{"state":"translated","value":"barre"}},"pt-PT":{"stringUnit":{"state":"translated","value":"barra"}},"pl":{"stringUnit":{"state":"translated","value":"słupek"}},"ru":{"stringUnit":{"state":"translated","value":"столбец"}},"it":{"stringUnit":{"state":"translated","value":"barra"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"柱形"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"長條"}}}},
+    "bars": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Balken"}},"es":{"stringUnit":{"state":"translated","value":"barras"}},"fr":{"stringUnit":{"state":"translated","value":"barres"}},"pt-PT":{"stringUnit":{"state":"translated","value":"barras"}},"pl":{"stringUnit":{"state":"translated","value":"słupki"}},"ru":{"stringUnit":{"state":"translated","value":"столбцы"}},"it":{"stringUnit":{"state":"translated","value":"barre"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"柱形"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"長條"}}}},
+    "week of %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Woche ab %@"}},"es":{"stringUnit":{"state":"translated","value":"semana del %@"}},"fr":{"stringUnit":{"state":"translated","value":"semaine du %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"semana de %@"}},"pl":{"stringUnit":{"state":"translated","value":"tydzień od %@"}},"ru":{"stringUnit":{"state":"translated","value":"неделя с %@"}},"it":{"stringUnit":{"state":"translated","value":"settimana del %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%@ 所在周"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%@ 所在週"}}}},
+    "2W": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"2W"}},"es":{"stringUnit":{"state":"translated","value":"2S"}},"fr":{"stringUnit":{"state":"translated","value":"2S"}},"pt-PT":{"stringUnit":{"state":"translated","value":"2S"}},"pl":{"stringUnit":{"state":"translated","value":"2T"}},"ru":{"stringUnit":{"state":"translated","value":"2Н"}},"it":{"stringUnit":{"state":"translated","value":"2S"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"2周"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"2週"}}}},
+    "3W": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"3W"}},"es":{"stringUnit":{"state":"translated","value":"3S"}},"fr":{"stringUnit":{"state":"translated","value":"3S"}},"pt-PT":{"stringUnit":{"state":"translated","value":"3S"}},"pl":{"stringUnit":{"state":"translated","value":"3T"}},"ru":{"stringUnit":{"state":"translated","value":"3Н"}},"it":{"stringUnit":{"state":"translated","value":"3S"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"3周"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"3週"}}}},
+    "%lld daily %@ · %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%1$lld tägliche %2$@ · %3$@"}},"es":{"stringUnit":{"state":"translated","value":"%lld %@ por día · %@"}},"fr":{"stringUnit":{"state":"translated","value":"%lld %@ par jour · %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld %@ por dia · %@"}},"pl":{"stringUnit":{"state":"translated","value":"dziennie — %2$@: %1$lld · %3$@"}},"ru":{"stringUnit":{"state":"translated","value":"по дням — %2$@: %1$lld · %3$@"}},"it":{"stringUnit":{"state":"translated","value":"%lld %@ per giorno · %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 个每日%@ · %@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 個每日%@ · %@"}}}},
+    "%lld weekly %@ · average per observed day · %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%1$lld wöchentliche %2$@ · Durchschnitt je erfasstem Tag · %3$@"}},"es":{"stringUnit":{"state":"translated","value":"%lld %@ por semana · promedio por día registrado · %@"}},"fr":{"stringUnit":{"state":"translated","value":"%lld %@ par semaine · moyenne par jour enregistré · %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld %@ por semana · média por dia registado · %@"}},"pl":{"stringUnit":{"state":"translated","value":"tygodniowo — %2$@: %1$lld · średnia na zarejestrowany dzień · %3$@"}},"ru":{"stringUnit":{"state":"translated","value":"по неделям — %2$@: %1$lld · среднее за день с данными · %3$@"}},"it":{"stringUnit":{"state":"translated","value":"%lld %@ per settimana · media per giorno registrato · %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 个每周%@ · 有记录日的平均值 · %@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 個每週%@ · 有紀錄日的平均值 · %@"}}}},
+    "%lld monthly %@ · average per observed day · %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%1$lld monatliche %2$@ · Durchschnitt je erfasstem Tag · %3$@"}},"es":{"stringUnit":{"state":"translated","value":"%lld %@ por mes · promedio por día registrado · %@"}},"fr":{"stringUnit":{"state":"translated","value":"%lld %@ par mois · moyenne par jour enregistré · %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld %@ por mês · média por dia registado · %@"}},"pl":{"stringUnit":{"state":"translated","value":"miesięcznie — %2$@: %1$lld · średnia na zarejestrowany dzień · %3$@"}},"ru":{"stringUnit":{"state":"translated","value":"по месяцам — %2$@: %1$lld · среднее за день с данными · %3$@"}},"it":{"stringUnit":{"state":"translated","value":"%lld %@ per mese · media per giorno registrato · %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 个每月%@ · 有记录日的平均值 · %@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 個每月%@ · 有紀錄日的平均值 · %@"}}}},
+    "%@ steps": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%@ Schritte"}},"es":{"stringUnit":{"state":"translated","value":"%@ pasos"}},"fr":{"stringUnit":{"state":"translated","value":"%@ pas"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%@ passos"}},"pl":{"stringUnit":{"state":"translated","value":"Liczba kroków: %@"}},"ru":{"stringUnit":{"state":"translated","value":"Шаги: %@"}},"it":{"stringUnit":{"state":"translated","value":"%@ passi"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%@ 步"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%@ 步"}}}},
+    "%@ average steps per observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%@ Schritte im Durchschnitt je erfasstem Tag"}},"es":{"stringUnit":{"state":"translated","value":"%@ pasos de promedio por día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"%@ pas en moyenne par jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Média de %@ passos por dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"Średnio %@ kroków na zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"В среднем %@ шагов за день с данными"}},"it":{"stringUnit":{"state":"translated","value":"Media di %@ passi per giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"有记录日平均 %@ 步"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"有紀錄日平均 %@ 步"}}}},
+    "Steps chart, no data": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Schrittdiagramm, keine Daten"}},"es":{"stringUnit":{"state":"translated","value":"Gráfico de pasos, sin datos"}},"fr":{"stringUnit":{"state":"translated","value":"Graphique des pas, aucune donnée"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Gráfico de passos, sem dados"}},"pl":{"stringUnit":{"state":"translated","value":"Wykres kroków, brak danych"}},"ru":{"stringUnit":{"state":"translated","value":"График шагов, нет данных"}},"it":{"stringUnit":{"state":"translated","value":"Grafico dei passi, nessun dato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"步数图表，无数据"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"步數圖表，無資料"}}}},
+    "Steps chart, %lld daily %@, latest %lld steps, %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Schrittdiagramm, %1$lld tägliche %2$@, zuletzt %3$lld Schritte, %4$@"}},"es":{"stringUnit":{"state":"translated","value":"Gráfico de pasos, %lld %@ por día, último registro: %lld pasos, %@"}},"fr":{"stringUnit":{"state":"translated","value":"Graphique des pas, %lld %@ par jour, dernier relevé : %lld pas, %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Gráfico de passos, %lld %@ por dia, último registo: %lld passos, %@"}},"pl":{"stringUnit":{"state":"translated","value":"Wykres kroków, dziennie — %2$@: %1$lld, ostatnia liczba kroków: %3$lld, %4$@"}},"ru":{"stringUnit":{"state":"translated","value":"График шагов, по дням — %2$@: %1$lld, последнее число шагов: %3$lld, %4$@"}},"it":{"stringUnit":{"state":"translated","value":"Grafico dei passi, %lld %@ per giorno, ultima rilevazione: %lld passi, %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"步数图表，%lld 个每日%@，最新 %lld 步，%@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"步數圖表，%lld 個每日%@，最新 %lld 步，%@"}}}},
+    "Steps chart, %lld weekly %@, latest %lld average steps per observed day, %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Schrittdiagramm, %1$lld wöchentliche %2$@, zuletzt %3$lld Schritte im Durchschnitt je erfasstem Tag, %4$@"}},"es":{"stringUnit":{"state":"translated","value":"Gráfico de pasos, %lld %@ por semana, último promedio: %lld pasos por día registrado, %@"}},"fr":{"stringUnit":{"state":"translated","value":"Graphique des pas, %lld %@ par semaine, dernière moyenne : %lld pas par jour enregistré, %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Gráfico de passos, %lld %@ por semana, última média: %lld passos por dia registado, %@"}},"pl":{"stringUnit":{"state":"translated","value":"Wykres kroków, tygodniowo — %2$@: %1$lld, ostatnia średnia: %3$lld kroków na zarejestrowany dzień, %4$@"}},"ru":{"stringUnit":{"state":"translated","value":"График шагов, по неделям — %2$@: %1$lld, последнее среднее: %3$lld шагов за день с данными, %4$@"}},"it":{"stringUnit":{"state":"translated","value":"Grafico dei passi, %lld %@ per settimana, ultima media: %lld passi per giorno registrato, %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"步数图表，%lld 个每周%@，最新有记录日平均 %lld 步，%@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"步數圖表，%lld 個每週%@，最新有紀錄日平均 %lld 步，%@"}}}},
+    "Steps chart, %lld monthly %@, latest %lld average steps per observed day, %@": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"Schrittdiagramm, %1$lld monatliche %2$@, zuletzt %3$lld Schritte im Durchschnitt je erfasstem Tag, %4$@"}},"es":{"stringUnit":{"state":"translated","value":"Gráfico de pasos, %lld %@ por mes, último promedio: %lld pasos por día registrado, %@"}},"fr":{"stringUnit":{"state":"translated","value":"Graphique des pas, %lld %@ par mois, dernière moyenne : %lld pas par jour enregistré, %@"}},"pt-PT":{"stringUnit":{"state":"translated","value":"Gráfico de passos, %lld %@ por mês, última média: %lld passos por dia registado, %@"}},"pl":{"stringUnit":{"state":"translated","value":"Wykres kroków, miesięcznie — %2$@: %1$lld, ostatnia średnia: %3$lld kroków na zarejestrowany dzień, %4$@"}},"ru":{"stringUnit":{"state":"translated","value":"График шагов, по месяцам — %2$@: %1$lld, последнее среднее: %3$lld шагов за день с данными, %4$@"}},"it":{"stringUnit":{"state":"translated","value":"Grafico dei passi, %lld %@ per mese, ultima media: %lld passi per giorno registrato, %@"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"步数图表，%lld 个每月%@，最新有记录日平均 %lld 步，%@"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"步數圖表，%lld 個每月%@，最新有紀錄日平均 %lld 步，%@"}}}},
+    "1 observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"1 erfasster Tag"}},"es":{"stringUnit":{"state":"translated","value":"1 día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"1 jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"1 dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"1 zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"1 день с данными"}},"it":{"stringUnit":{"state":"translated","value":"1 giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"1 天有记录"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"1 天有紀錄"}}}},
+    "%lld observed days": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%lld erfasste Tage"}},"es":{"stringUnit":{"state":"translated","value":"%lld días registrados"}},"fr":{"stringUnit":{"state":"translated","value":"%lld jours enregistrés"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld dias registados"}},"pl":{"stringUnit":{"state":"translated","value":"Zarejestrowane dni: %lld"}},"ru":{"stringUnit":{"state":"translated","value":"Дней с данными: %lld"}},"it":{"stringUnit":{"state":"translated","value":"%lld giorni registrati"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 天有记录"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 天有紀錄"}}}},
+    "1 week · averages per observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"1 Woche · Durchschnitt je erfasstem Tag"}},"es":{"stringUnit":{"state":"translated","value":"1 semana · promedios por día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"1 semaine · moyennes par jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"1 semana · médias por dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"1 tydzień · średnie na zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"1 неделя · средние за день с данными"}},"it":{"stringUnit":{"state":"translated","value":"1 settimana · medie per giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"1 周 · 有记录日的平均值"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"1 週 · 有紀錄日的平均值"}}}},
+    "%lld weeks · averages per observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%lld Wochen · Durchschnitt je erfasstem Tag"}},"es":{"stringUnit":{"state":"translated","value":"%lld semanas · promedios por día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"%lld semaines · moyennes par jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld semanas · médias por dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"Liczba tygodni: %lld · średnie na zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"Недель: %lld · средние за день с данными"}},"it":{"stringUnit":{"state":"translated","value":"%lld settimane · medie per giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 周 · 有记录日的平均值"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 週 · 有紀錄日的平均值"}}}},
+    "1 month · averages per observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"1 Monat · Durchschnitt je erfasstem Tag"}},"es":{"stringUnit":{"state":"translated","value":"1 mes · promedios por día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"1 mois · moyennes par jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"1 mês · médias por dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"1 miesiąc · średnie na zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"1 месяц · средние за день с данными"}},"it":{"stringUnit":{"state":"translated","value":"1 mese · medie per giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"1 个月 · 有记录日的平均值"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"1 個月 · 有紀錄日的平均值"}}}},
+    "%lld months · averages per observed day": {"localizations":{"de":{"stringUnit":{"state":"translated","value":"%lld Monate · Durchschnitt je erfasstem Tag"}},"es":{"stringUnit":{"state":"translated","value":"%lld meses · promedios por día registrado"}},"fr":{"stringUnit":{"state":"translated","value":"%lld mois · moyennes par jour enregistré"}},"pt-PT":{"stringUnit":{"state":"translated","value":"%lld meses · médias por dia registado"}},"pl":{"stringUnit":{"state":"translated","value":"Liczba miesięcy: %lld · średnie na zarejestrowany dzień"}},"ru":{"stringUnit":{"state":"translated","value":"Месяцев: %lld · средние за день с данными"}},"it":{"stringUnit":{"state":"translated","value":"%lld mesi · medie per giorno registrato"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"%lld 个月 · 有记录日的平均值"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"%lld 個月 · 有紀錄日的平均值"}}}},
     "%lld working sets · compare when you repeat this program": { "localizations": {
       "de": {"stringUnit": {"state": "translated", "value": "%lld Arbeitssätze · vergleichbar, wenn du dieses Programm wiederholst"}}, "es": {"stringUnit": {"state": "translated", "value": "%lld series efectivas · compara al repetir este programa"}}, "fr": {"stringUnit": {"state": "translated", "value": "%lld séries de travail · à comparer quand tu refais ce programme"}}, "it": {"stringUnit": {"state": "translated", "value": "%lld serie di lavoro · confronta quando ripeti questo programma"}}, "pl": {"stringUnit": {"state": "translated", "value": "%lld serii roboczych · porównuj, gdy powtarzasz ten program"}}, "pt-PT": {"stringUnit": {"state": "translated", "value": "%lld séries de trabalho · compara quando repetires este programa"}}, "ru": {"stringUnit": {"state": "translated", "value": "%lld рабочих подходов · сравнивай при повторе этой программы"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "%lld 个正式组 · 重复同一计划时才可比较"}}, "zh-Hant": {"stringUnit": {"state": "translated", "value": "%lld 個正式組 · 重複同一計畫時才可比較"}}
     } },
@@ -8697,71 +8732,6 @@
         }
       }
     },
-    "%lld app%@ on": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld App%@ aktiv"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld app%@ on"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld app%@ activas"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld app%@ sur"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld app%@ attive"
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld aplicação%@ ativado"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Включено приложений: %lld"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已开启 %lld 个应用%@"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已開啟 %lld 個應用程式%@"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aplikacja %lld%@ włączona"
-          }
-        }
-      }
-    },
     "%lld apps on": {
       "localizations": {
         "de": {
@@ -10130,71 +10100,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld zwolnienie"
-          }
-        }
-      }
-    },
-    "%lld frame%@ captured this session.": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld Frame%@ in dieser Sitzung erfasst."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld frame%@ captured this session."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld fotograma%@ capturados en esta sesión."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld trame%@ capturée cette séance."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld frame%@ acquisiti in questa sessione."
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld frame%@ capturou esta sessão."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "За эту сессию записано измерений: %lld."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "本次会话已捕获 %lld 帧%@。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "本次工作階段已擷取 %lld 幀%@。"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ramka %lld%@ przechwyciła tę sesję."
           }
         }
       }
@@ -11971,136 +11876,6 @@
         }
       }
     },
-    "%lld reading%@ line up so far, not enough to read a trend yet (NOOP waits for %lld).": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld Messwert%2$@ stimmen bisher überein, noch nicht genug für einen Trend (NOOP wartet auf %3$lld)."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%1$lld reading%2$@ line up so far, not enough to read a trend yet (NOOP waits for %3$lld)."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld lectura%@ coinciden hasta ahora, no es suficiente para leer una tendencia todavía (NOOP espera %lld)."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld lecture%2$@ concordent jusqu'à présent, pas suffisant pour dégager une tendance (NOOP attend %3$lld)."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld lettura%2$@ allineate finora, non abbastanza per leggere un andamento (NOOP aspetta %3$lld)."
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld leitura%2$@ alinhado até ao momento, ainda não é suficiente para ler uma tendência (NOOP espera por %3$lld)."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld измерени%2$@ пока набрано, недостаточно для определения тренда (NOOP ждёт %3$lld)."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "目前已有 %1$lld 条读数%2$@对齐，还不足以读出趋势（NOOP 需等待 %3$lld 条）。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "目前已有 %1$lld 筆讀數%2$@對齊，還不足以讀出趨勢（NOOP 需等待 %3$lld 筆）。"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld odczyt %2$@ jest w kolejce, ale to jeszcze za mało, aby odczytać trend (NOOP czeka na %3$lld)."
-          }
-        }
-      }
-    },
-    "%lld reading%@ · your own entries": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld Messwert%2$@ · deine eigenen Einträge"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%1$lld reading%2$@ · your own entries"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld lectura%@ · tus propias entradas"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld lecture%2$@ · vos propres entrées"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld lettura%2$@ · le tue voci"
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld leitura%2$@ · as tuas entradas"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld измерени%2$@ · ваши собственные записи"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld 条读数%2$@ · 你自己的记录"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld 筆讀數%2$@ · 你自己的記錄"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld czytanie%2$@ · własne wpisy"
-          }
-        }
-      }
-    },
     "%lld readings across %lld · %@": {
       "localizations": {
         "de": {
@@ -13363,71 +13138,6 @@
         }
       }
     },
-    "%lld type-0x2F historical-offload frame%@ seen outside our sync. These are history (e.g. another app pulling the strap's backlog), not a live R22 stream (#494).": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld type-0x2F-Frame%2$@ (historischer Offload) außerhalb unserer Synchronisierung gesehen. Das ist Verlauf (z. B. eine andere App, die den Rückstand des Straps abruft), kein Live-R22-Stream (#494)."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%1$lld type-0x2F historical-offload frame%2$@ seen outside our sync, these are history (e.g. another app pulling the strap's backlog), not a live R22 stream (#494)."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld trama%@ de descarga histórica tipo 0x2F vistos fuera de nuestra sincronización. Son historial (p. ej., otra app extrayendo el archivo de la pulsera), no una transmisión R22 en vivo (#494)."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld trame%2$@ de transfert historique type-0x2F repérée hors de notre synchronisation. Ce sont des éléments d'historique (par ex. une autre appli qui récupère l'arriéré du bracelet), pas un flux R22 en direct (#494)."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld frame%2$@ di scarico storico type-0x2F visti al di fuori della nostra sincronizzazione, sono cronologia (es. un'altra app che scarica l'arretrato della fascia), non uno stream R22 in diretta (#494)."
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld type-0x2F histórico-offload frame%2$@ visto fora da nossa sincronização, estes são históricos (por exemplo, outra aplicação a puxar o backlog da bracelete), não uma transmissão R22 em direto (#494)."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld кадр%2$@ типа 0x2F (historical-offload) вне нашей синхронизации — это история (например, другое приложение считывает архив браслета), а не активный поток R22 (#494)."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在我们的同步之外检测到 %1$lld 个 type-0x2F 历史卸载帧%2$@，这些是历史数据（例如另一个应用在拉取手环的积压数据），而非实时 R22 流（#494）。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在我們的同步之外偵測到 %1$lld 個 type-0x2F 歷史卸載幀%2$@，這些是歷史資料（例如另一個應用程式在拉取手環的積壓資料），而非即時 R22 流（#494）。"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld typ-0x2F historyczna ramka odciążająca%2$@ widoczna poza naszą synchronizacją, to jest historia (np. inna aplikacja pobierająca zaległości paska), a nie strumień na żywo R22 (#494)."
-          }
-        }
-      }
-    },
     "%lld type-0x2F historical-offload frames seen outside our sync. These are history (e.g. another app pulling the strap's backlog), not a live R22 stream (#494).": {
       "localizations": {
         "de": {
@@ -13720,71 +13430,6 @@
           "one": { "stringUnit": { "state": "translated", "value": "%lld 次訓練" } },
           "other": { "stringUnit": { "state": "translated", "value": "%lld 次訓練" } }
         } } }
-      }
-    },
-    "%lld year%@ %@ than your age": {
-      "extractionState": "stale",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld Jahr%2$@ %3$@ als dein Alter"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%1$lld year%2$@ %3$@ than your age"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld año%@ %@ que tu edad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld an%2$@ %3$@ que votre âge"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld ann%2$@ %3$@ della tua età"
-          }
-        },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld ano%@ %@ que a tua idade"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld год%2$@ %3$@ вашего возраста"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "比你的年龄%3$@ %1$lld 岁%2$@"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "比你的年齡%3$@ %1$lld 歲%2$@"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$lld rok%2$@ %3$@ niż Twój wiek"
-          }
-        }
       }
     },
     "%lld years older than your age": {
@@ -155046,6 +154691,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "全天壓力變化"
+          }
+        }
+      }
+    },
+    "Stress %@ of 3": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ von 3"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ of 3"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estrés %@ de 3"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ de 3"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ di 3"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ de 3"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стресс %@ из 3"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "压力 %@（满分 3）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "壓力 %@（滿分 3）"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Naprężenie %@ równe 3"
           }
         }
       }
