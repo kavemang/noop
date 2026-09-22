@@ -533,6 +533,41 @@ class WhoopBleClient(
 
     companion object {
         private const val TAG = "WhoopBleClient"
+
+        /** #2384: the `HR notify:` line, so a strap log says whether the standard 0x2A37 profile is
+         *  delivering anything at all, and whether what it delivered was usable.
+         *
+         *  iOS has printed this line since #14, the day after its standard-profile parser landed; Android
+         *  never did, and the difference is not cosmetic. A reporter's 5/MG banked `live hr=0 rr=0` on ten consecutive links
+         *  while the historical offload ran perfectly, and their Android log could not distinguish the two
+         *  explanations: the strap never notified on 0x2A37, or it notified with a value
+         *  [parseStandardHr] drops on its 30..220 plausibility check without a word. Those call for
+         *  opposite fixes, and the epitaph's link-wide frame tally cannot tell them apart either.
+         *
+         *  ` ignored` marks the second case, and is the SAME range the value gate uses: if this line says
+         *  ignored, the reading did not reach the UI or the store, and if the line is absent entirely the
+         *  characteristic is silent. Twin of the Swift `BLEManager.standardHrNotifyLine`, so one strap log
+         *  per platform describing one stream reads identically. */
+        internal fun standardHrNotifyLine(hr: Int, rrCount: Int): String {
+            val plausibility = if (hr in 30..220) "" else " ignored"
+            return "HR notify: $hr bpm$plausibility, rr=$rrCount"
+        }
+
+        /** Rate-limit for [standardHrNotifyLine]: the profile runs at about 1 Hz, so an unconditional
+         *  line would bury the rest of the capture. One every 30s answers what it exists to answer, which
+         *  is whether the stream is alive and what shape its readings are, not every beat.
+         *
+         *  Emits on a zero [lastEmitMs] (the first reading of a link is the one most worth having) and on
+         *  a BACKWARDS clock, matching [shouldEmitLiveInsertFailure] next door: `currentTimeMillis` is
+         *  wall time and can step back, and comparing only forwards would strand the stamp in the future
+         *  and silence the line indefinitely. Apple's twin compares `Date`s inline and silences on that
+         *  step instead; the WORDING is pinned across platforms, this cadence policy deliberately is not. */
+        internal fun shouldLogStandardHrNotify(
+            lastEmitMs: Long,
+            nowMs: Long,
+            minGapMs: Long = 30_000L,
+        ): Boolean = lastEmitMs <= 0L || nowMs < lastEmitMs || nowMs - lastEmitMs >= minGapMs
+
         /** #2387: the outcome token on a `session ended` line, so a timeout says whether it achieved anything.
          *
          *  A WHOOP 4.0 routinely ends a PRODUCTIVE offload on the idle timeout, because that firmware
@@ -2876,6 +2911,9 @@ class WhoopBleClient(
     private val liveInsertFailuresStd = java.util.concurrent.atomic.AtomicInteger(0)
     private val liveInsertFailuresRealtime = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var lastStdInsertFailureLogMs = 0L
+    /** #2384: when the `HR notify:` line last went out, for [shouldLogStandardHrNotify]. Volatile for the
+     *  same reason the stamps beside it are: 0x2A37 notifications arrive on a binder thread. */
+    @Volatile private var lastStandardHrNotifyLogMs = 0L
     @Volatile private var lastRealtimeInsertFailureLogMs = 0L
 
     /** #1635: ms since the CLIENT_HELLO write, or null when none is outstanding. Lets the bond-state
@@ -7333,6 +7371,25 @@ class WhoopBleClient(
                     val realtimeWantNow = screenWantsRealtime || continuousCaptureWantsNow()
                     wantsRealtime = realtimeWantNow
                     if (realtimeWantNow) { realtimeArmed = true; realtimeArmedThisLink = true; send(CommandNumber.TOGGLE_REALTIME_HR, byteArrayOf(1)) }
+                    // #2384: start the live-stream keep-alive HERE, on the hello-acked branch, exactly as the
+                    // Swift twin does in its own `.whoop5` branch. Its only other Android caller is
+                    // [runConnectHandshake], which is WHOOP4-only (the guard is a few lines below), and the
+                    // live-HR latch in [parseStandardHr] is guarded by `!state.bonded` — which the update at
+                    // the top of THIS block has just closed. So a 5/MG that bonds by CLIENT_HELLO started no
+                    // keep-alive at all, on any link, and with it none of what that tick owns: the one-shot
+                    // 0x2A37 re-subscribe when the stream goes quiet, the stall bounce, the #1865 realtime
+                    // re-arm, the #927 overnight-window re-derivation, the #2332 periodic RSSI read and the
+                    // ~60s battery poll. Every recovery for a dead live stream sat behind a start condition
+                    // that a dead live stream cannot meet.
+                    //
+                    // A reporter's log shows the shape of the absence rather than the bug itself: ten links,
+                    // `live hr=0 rr=0` on every one, exactly one `Signal: RSSI` line per link (the read at
+                    // connect, never the periodic one) and a battery cadence with a 13-minute hole in it.
+                    //
+                    // Idempotent and cheap to reach twice: [startKeepAlive] cancels its own callback before
+                    // re-posting, and [keepAliveFire] returns unless the link is connected and bonded, stands
+                    // aside entirely while backfilling, and carries the wide 5/MG stall fuse (#580/#1414).
+                    startKeepAlive()
                 }
             } else if (!didBond && connectedFamily == DeviceFamily.WHOOP4) {
                 didBond = true
@@ -8647,6 +8704,15 @@ class WhoopBleClient(
                 // 1/1024-s unit). For other devices, convert per spec.
                 rr.add(if (isWhoop5) raw else Math.round(raw / 1024.0 * 1000.0).toInt())
             }
+        }
+
+        // #2384: one line per 30s saying the standard profile delivered a reading, and whether it was
+        // usable. Emitted BEFORE the gates below, which is the whole point: a value they drop leaves no
+        // other trace. Port of the iOS `HR notify:` line.
+        val hrNotifyNowMs = System.currentTimeMillis()
+        if (shouldLogStandardHrNotify(lastStandardHrNotifyLogMs, hrNotifyNowMs)) {
+            lastStandardHrNotifyLogMs = hrNotifyNowMs
+            log(standardHrNotifyLine(hr, rr.size))
         }
 
         // R-R: the standard profile is the reliable source — surface whenever present. withRRIntervals
