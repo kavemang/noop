@@ -3401,6 +3401,22 @@ class WhoopBleClient(
      * Diagnostic only — nothing reads these to make a decision.
      */
     @Volatile
+    /** #2397: how many RSSI readings this link produced, and their worst and total, so the epitaph can
+     *  report a SHAPE rather than a point. #2332 added the ~60s periodic read and kept only the latest
+     *  value, so a link that took 200 readings reported one of them: a field log showed 467 reads across
+     *  three links and two epitaphs naming two numbers. Last alone cannot separate "marginal all along"
+     *  from "walked out of range", which is the question a supervision timeout raises.
+     *
+     *  Free: these are fed by readings the ~60s read ALREADY takes. No extra radio work, no new timer.
+     *
+     *  Plain, not @Volatile, for the reason the frame counters below carry: `+=` is not atomic whatever
+     *  it is annotated with, and an approximate count still answers the question. The stash above is
+     *  volatile because a torn read there would misattribute ONE reading to the wrong link; being one
+     *  reading out in a mean of two hundred changes nothing a reader would act on. */
+    private var rssiReads = 0
+    private var rssiWorstDbm: Int? = null
+    private var rssiSumDbm = 0
+
     private var lastRssiDbm: Int? = null
 
     /** Wall time (ms) [lastRssiDbm] was read. Meaningless unless [lastRssiDbm] is non-null; the two are
@@ -6338,6 +6354,16 @@ class WhoopBleClient(
      *  GATT callbacks (where it's read/reset) land on binder-pool threads on API 26/27. (#48, adopt
      *  from ryanbr — reimplemented under NoopApp) */
     @Volatile
+    /** #2406: when a PASSIVE reconnect was handed to Android, or null when none is outstanding. The
+     *  client does nothing while such a wait runs — no scan, no timer — so without this the log cannot
+     *  tell a long wait from the app having stopped trying. Read once, when the link comes up.
+     *
+     *  Stamped where [passiveReconnectDecision] chooses the passive handoff, NOT wherever
+     *  `autoConnect = true` appears: the radio-on re-arm, the two bond-loop probes and the launch
+     *  auto-reconnect all pass that flag, and none of them is a wait the app chose to sit out. Another
+     *  path can still win the race and bring the link up first, which is why the line says a wait was
+     *  OUTSTANDING rather than claiming which connect answered it. */
+    private var passiveReconnectSinceMs: Long? = null
     private var failedReconnectAttempts = 0
 
     /** Bump the attempt counter and return the next backoff delay. Called from the disconnect path
@@ -6386,6 +6412,12 @@ class WhoopBleClient(
     private fun cancelPendingReconnect() {
         pendingReconnectRunnable?.let { handler.removeCallbacks(it) }
         pendingReconnectRunnable = null
+        // #2406: a passive wait that was called off is not one that was outstanding when a link came up.
+        // The STATE_CONNECTED handler reports BEFORE it calls this, so the wait it describes is the one
+        // that was still pending at that moment; every other caller (a user Connect, the launch
+        // auto-reconnect, a radio-on re-arm) is superseding the wait, and the log should not later credit
+        // it to whichever connect happened to win.
+        passiveReconnectSinceMs = null
     }
 
     /** Run [action] after [delayMs], but ONLY if the SAME continuous connection is still up when it fires.
@@ -6872,6 +6904,15 @@ class WhoopBleClient(
                 BluetoothProfile.STATE_CONNECTED -> {
                     // Port of didConnect: mark connected, negotiate a larger ATT MTU, THEN discover.
                     handler.removeCallbacks(scanTimeoutRunnable)
+                    // #2406: how long a passive wait had been outstanding, reported BEFORE
+                    // cancelPendingReconnect clears it and before the backoff counter below is reset,
+                    // since both are part of what the line says.
+                    passiveReconnectSinceMs?.let { since ->
+                        passiveReconnectSinceMs = null
+                        log(passiveReconnectAnsweredLine(
+                            waitedSeconds = (System.currentTimeMillis() - since) / 1000,
+                            attempts = failedReconnectAttempts))
+                    }
                     // #1030 (ryanbr): a real link is up — cancel any pending involuntary reconnect so a
                     // stale backoff timer can't fire and reset+close this connection.
                     cancelPendingReconnect()
@@ -6895,6 +6936,8 @@ class WhoopBleClient(
                     // #1809: this link's inbound tally starts empty, so the epitaph on disconnect reports
                     // exactly what arrived on THIS link and never a previous session's traffic.
                     inboundFrames = 0; inboundBytes = 0; cmdChannelFrames = 0
+                    // #2397: and the per-link signal shape, for the same reason.
+                    rssiReads = 0; rssiWorstDbm = null; rssiSumDbm = 0
                     // Same guarantee for the rejection tally: a link that opens without a preceding clean
                     // teardown would otherwise report the previous link's rejections as its own.
                     rejectTally.reset(); loggedRejectReasons.clear()
@@ -7061,6 +7104,11 @@ class WhoopBleClient(
             // guarantee: a reader that sees the new value cannot then see an older clock.
             lastRssiAtMs = System.currentTimeMillis()
             lastRssiDbm = rssi
+            // #2397: fold into the per-link shape. AFTER the stale guard, for the same reason the stash
+            // is: a late answer from a dead link must not be counted against the live one's summary.
+            rssiReads += 1
+            rssiSumDbm += rssi
+            rssiWorstDbm = rssiWorstDbm?.let { minOf(it, rssi) } ?: rssi
         }
 
         @SuppressLint("MissingPermission")
@@ -11230,6 +11278,7 @@ class WhoopBleClient(
                 cmdChannelFrames = cmdChannelFrames, realtimeArmed = realtimeArmedThisLink,
                 rssiDbm = rssiAtDrop,
                 rssiAgeMillis = rssiAgeAtDrop,
+                rssiReads = rssiReads, rssiWorstDbm = rssiWorstDbm, rssiSumDbm = rssiSumDbm,
                 // #1820 parity: Apple's epitaph reports "intentional" for a deliberate teardown rather
                 // than an error code, and a field log showed Android printing "ended=status=0" for the
                 // same event. Two reports of the same drop should not read differently. The flag is set
@@ -11261,6 +11310,7 @@ class WhoopBleClient(
         }
         // Clear the tally with the link, so a second teardown for the same drop cannot re-report it.
         inboundFrames = 0; inboundBytes = 0; cmdChannelFrames = 0
+        rssiReads = 0; rssiWorstDbm = null; rssiSumDbm = 0
         rejectTally.reset(); loggedRejectReasons.clear()
         liveHr.set(0); liveRr.set(0); offloadHr.set(0); offloadRr.set(0)
         offloadGravity.set(0); offloadResp.set(0); offloadSkinTemp.set(0)
@@ -11606,6 +11656,10 @@ class WhoopBleClient(
                 val passiveReconnect = passiveReconnectDecision(failedReconnectAttempts, aclHeld)
                 log("Disconnected ${disconnectStatusLabel(status)}; reconnecting ${if (passiveReconnect) "passively" else "directly"} in ${directDelay / 1000}s (attempt $failedReconnectAttempts$heldSuffix${if (aclHeld) ", ACL-held" else ""})")
                 // #1030 (ryanbr): cancellable backoff timer (see scheduleReconnect).
+                // #2406: only the PASSIVE handoff is the silence worth timing. `autoConnect = true` is
+                // not the same thing: the radio-on re-arm, the two bond-loop probes and the launch
+                // auto-reconnect all pass it, and none of them is a wait the app chose to sit out.
+                if (passiveReconnect) passiveReconnectSinceMs = System.currentTimeMillis()
                 scheduleReconnect(directDelay) { connectToDevice(dev, autoConnect = passiveReconnect) }
             } else {
                 val rescanDelay = nextReconnectDelayMs()
