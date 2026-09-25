@@ -1090,6 +1090,8 @@ extension WhoopStore {
             // Replaying one session in order.
             try db.create(index: "idx_liftSet_session_ord", on: "liftSet",
                           columns: ["sessionId", "ord"], options: [.ifNotExists])
+        }
+
         // v47 (#1410 tier 3): record which exact app build last computed each persisted score cell and
         // when. This is separate from scoreInputProvenance: that table answers which INPUT/provider or
         // estimator produced a value, while this one answers which CODE produced it. Existing history
