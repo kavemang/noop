@@ -64,6 +64,20 @@ object StrainScorer {
     /** Top of the Effort scale (was 21.0 — rescaled to 0–100 for "Effort"). */
     const val maxStrain: Double = 100.0
 
+    /** Top of WHOOP's Day Strain axis. Every inherited 0–21 value maps through [effortValueFromWhoopStrain]. */
+    const val whoopMaxStrain: Double = 21.0
+
+    /**
+     * Map any value on WHOOP's 0–21 Day Strain axis onto NOOP's current 0–[maxStrain] Effort axis.
+     * This is a value conversion rather than a one-off threshold constant so every range boundary
+     * inherited from the 0–21 scale uses the same proportional mapping.
+     * Swift twin: `StrainScorer.effortValue`. Multiplies by the pre-divided ratio so the result is
+     * bit-identical to the importers' existing rescale of the same fact
+     * (WhoopCsvImporter.DAY_STRAIN_TO_EFFORT_SCALE, Swift's dayStrainToEffortScale);
+     * `value * maxStrain / whoopMaxStrain` disagrees with them by an ULP on about a quarter of inputs.
+     */
+    fun effortValueFromWhoopStrain(value: Double): Double = value * (maxStrain / whoopMaxStrain)
+
     /**
      * Logarithmic-map denominator D. Chosen so the Edwards daily ceiling
      * (top zone weight 5 sustained 24 h = 7200) maps to exactly maxStrain:

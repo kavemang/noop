@@ -899,7 +899,7 @@
     <string name="l10n_smart_alarm_screen_wind_down_nudge_5ca87a0f">Напоминание о подготовке ко сну</string>
     <string name="l10n_smart_alarm_screen_window_length_46179fcb">Длина окна</string>
     <string name="l10n_smart_alarm_screen_windowminutes_min_bd89fd82">%1$s мин</string>
-    <string name="l10n_smart_alarm_screen_your_whoop_5_mg_won_t_75029bae">Ваш WHOOP 5/MG не установит это, пока не включён экспериментальный режим (Настройки → Experimental). Right now your wake time is saved but the strap is NOT armed.</string>
+    <string name="l10n_smart_alarm_screen_your_whoop_5_mg_won_t_75029bae">Для будильника на браслете WHOOP 5/MG включите Пробы протокола (Тестовый центр → Диагностика протокола 5/MG). Время пробуждения сохранено, но будильник на браслете ещё не активирован. Оставьте резервный будильник.</string>
     <string name="l10n_steps_calibration_screen_calibrate_your_steps_38b4e814">Откалибруйте шаги</string>
     <string name="l10n_steps_calibration_screen_close_bbfa773e">Закрыть</string>
     <string name="l10n_steps_calibration_screen_day_987b9ced">День</string>
@@ -2378,6 +2378,12 @@
     <string name="today_driver_below_supporting">ниже нормы, поддерживает восстановление</string>
     <string name="today_driver_above_limiting">выше нормы, ограничивает восстановление</string>
     <string name="today_driver_below_limiting">ниже нормы, ограничивает восстановление</string>
+    <string name="today_driver_slightly_above_supporting">слегка выше нормы, поддерживает восстановление</string>
+    <string name="today_driver_slightly_below_supporting">слегка ниже нормы, поддерживает восстановление</string>
+    <string name="today_driver_slightly_above_limiting">слегка выше нормы, ограничивает восстановление</string>
+    <string name="today_driver_slightly_below_limiting">слегка ниже нормы, ограничивает восстановление</string>
+    <string name="today_driver_above_too_small">выше нормы, разница слишком мала, чтобы изменить Charge</string>
+    <string name="today_driver_below_too_small">ниже нормы, разница слишком мала, чтобы изменить Charge</string>
     <string name="today_driver_at_baseline">на уровне нормы</string>
     <string name="today_driver_hrv_saturation">ниже нормы, ограничивает восстановление, однако низкий пульс в покое указывает, что причиной может быть парасимпатическое насыщение, а не усталость</string>
     <string name="today_driver_strong_night">сильная ночь, поддерживающая восстановление</string>
@@ -2720,4 +2726,6 @@
     <string name="l10n_today_screen_pending_sync_complete_5940c589">Ожидает синхронизации · %1$s</string>
     <string name="l10n_today_screen_value_bpm_complete_ab58df4e">%1$s уд/мин%2$s</string>
     <string name="fused_record_contribution_in_use">%1$s, %2$s, используется</string>
+    <string name="smart_alarm_5mg_armed_experimental">Будильник установлен на браслете экспериментальной командой 5/MG. Сообщалось о срабатывании на 5.0 и MG, но оно не гарантировано. Оставьте резервный будильник для важных событий.</string>
+    <string name="raw_diag_protocol_probes_detail">Отправляет экспериментальные запросы протокола и включает будильник браслета 5/MG. Не требуется для обычной синхронизации, сна, восстановления или подсчёта шагов.</string>
 </resources>

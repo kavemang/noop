@@ -160,6 +160,7 @@ import com.noop.analytics.BatteryEstimator
 import com.noop.analytics.ChargeDriver
 import com.noop.analytics.ChargeDriverLabel
 import com.noop.analytics.ChargeDriverUnit
+import com.noop.analytics.RecoveryDrivers
 import com.noop.analytics.ChargeDriverVerdict
 import com.noop.analytics.DayCycleMode
 import com.noop.analytics.DayCycleIntelligenceIntegration
@@ -5530,7 +5531,8 @@ private fun DriverRow(driver: ChargeDriver) {
         ChargeDriverUnit.BEATS_PER_MINUTE -> uiString(R.string.today_driver_value_bpm, driver.value.roundToInt())
         ChargeDriverUnit.PERCENT -> uiString(R.string.today_driver_value_percent, driver.value.roundToInt())
         ChargeDriverUnit.BREATHS_PER_MINUTE -> uiString(
-            R.string.today_driver_value_br_min, String.format(Locale.getDefault(), "%.1f", driver.value),
+            R.string.today_driver_value_br_min,
+            String.format(Locale.getDefault(), "%.1f", RecoveryDrivers.displayRounded(driver.value, 1)),
         )
         ChargeDriverUnit.CELSIUS_DEVIATION -> uiString(
             R.string.today_driver_value_temp_deviation,
@@ -5541,7 +5543,8 @@ private fun DriverRow(driver: ChargeDriver) {
         ChargeDriverUnit.MILLISECONDS -> uiString(R.string.today_driver_baseline_ms, baseline.roundToInt())
         ChargeDriverUnit.BEATS_PER_MINUTE -> uiString(R.string.today_driver_baseline_bpm, baseline.roundToInt())
         ChargeDriverUnit.BREATHS_PER_MINUTE -> uiString(
-            R.string.today_driver_baseline_br_min, String.format(Locale.getDefault(), "%.1f", baseline),
+            R.string.today_driver_baseline_br_min,
+            String.format(Locale.getDefault(), "%.1f", RecoveryDrivers.displayRounded(baseline, 1)),
         )
         ChargeDriverUnit.PERCENT, ChargeDriverUnit.CELSIUS_DEVIATION -> ""
     } } ?: ""
@@ -5550,6 +5553,16 @@ private fun DriverRow(driver: ChargeDriver) {
         ChargeDriverVerdict.BELOW_BASELINE_SUPPORTING -> uiString(R.string.today_driver_below_supporting)
         ChargeDriverVerdict.ABOVE_BASELINE_LIMITING -> uiString(R.string.today_driver_above_limiting)
         ChargeDriverVerdict.BELOW_BASELINE_LIMITING -> uiString(R.string.today_driver_below_limiting)
+        ChargeDriverVerdict.SLIGHTLY_ABOVE_BASELINE_SUPPORTING ->
+            uiString(R.string.today_driver_slightly_above_supporting)
+        ChargeDriverVerdict.SLIGHTLY_BELOW_BASELINE_SUPPORTING ->
+            uiString(R.string.today_driver_slightly_below_supporting)
+        ChargeDriverVerdict.SLIGHTLY_ABOVE_BASELINE_LIMITING ->
+            uiString(R.string.today_driver_slightly_above_limiting)
+        ChargeDriverVerdict.SLIGHTLY_BELOW_BASELINE_LIMITING ->
+            uiString(R.string.today_driver_slightly_below_limiting)
+        ChargeDriverVerdict.ABOVE_BASELINE_TOO_SMALL -> uiString(R.string.today_driver_above_too_small)
+        ChargeDriverVerdict.BELOW_BASELINE_TOO_SMALL -> uiString(R.string.today_driver_below_too_small)
         ChargeDriverVerdict.AT_BASELINE -> uiString(R.string.today_driver_at_baseline)
         ChargeDriverVerdict.HRV_SATURATION_LIMITING -> uiString(R.string.today_driver_hrv_saturation)
         ChargeDriverVerdict.STRONG_NIGHT_SUPPORTING -> uiString(R.string.today_driver_strong_night)
