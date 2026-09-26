@@ -115,8 +115,10 @@ struct StrandiOSApp: App {
         _liveActivity = State(initialValue: liveActivity)
         // A gym session keeps ONE banner on the Lock Screen, its own — as the live-HR banner already
         // stands aside for it. A sync started in the foreground mid-session starts no sync banner.
+        // Held back only for a gym banner that will actually show: with its switch off, a session leaves the
+        // Lock Screen to the sync, rather than to nothing.
         SyncLiveActivityController.shared.holdsBackNewBanner = { [weak liftSession] in
-            liftSession?.isActive == true
+            liftSession?.isActive == true && UnitPrefs.liftLiveActivityEnabled()
         }
         // Before any view or publisher exists: the first push to the Lock Screen banner must find the
         // session already running, or it ends the banner iOS kept alive across the restart.
