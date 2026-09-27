@@ -1006,7 +1006,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _today.value = resolveTodayRow(days, logicalKey, localKey)
                 val previousAlert = _healthAlert.value
                 _healthAlert.value =
-                    if (_illnessWatchEnabled.value) IllnessWatch.evaluate(days) else null
+                    if (_illnessWatchEnabled.value && _today.value != null &&
+                        days.lastOrNull()?.day == _today.value?.day
+                    ) {
+                        IllnessWatch.evaluate(days)
+                    } else null
                 // Banner transition (clear → raised) → real system notification; the notifier's
                 // persisted day gate dedupes against the background-service call site.
                 if (previousAlert == null) {
@@ -2819,7 +2823,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _illnessWatchEnabled.value = enabled
         NoopPrefs.setIllnessWatch(appContext, enabled)
         // Recompute now — the recentDays collector only fires on data changes.
-        _healthAlert.value = if (enabled) IllnessWatch.evaluate(recentDays.value) else null
+        val days = recentDays.value
+        _healthAlert.value = if (enabled && _today.value != null &&
+            days.lastOrNull()?.day == _today.value?.day
+        ) {
+            IllnessWatch.evaluate(days)
+        } else null
     }
 
     /** #hide-cycle: hide/show the cycle-awareness offer. Hiding also stops active tracking, so "hidden"
