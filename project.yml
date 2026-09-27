@@ -21,7 +21,7 @@ settings:
     # iOS build number (CFBundleVersion). GLOBAL so the iOS app AND its widget extension inherit the
     # SAME value — they must match or iOS warns "extension version must match parent app" (#416).
     # macOS sets its own CFBundleVersion on the Strand target and is unaffected by this.
-    CURRENT_PROJECT_VERSION: "419"
+    CURRENT_PROJECT_VERSION: "421"
     SWIFT_VERSION: "5.0"
     # Emit localizable strings so Xcode auto-extracts every LocalizedStringKey into the
     # String Catalog on build (the English (US) base entries).
@@ -288,6 +288,7 @@ targets:
         # tracks BUNDLE_ID_PREFIX, and each is registered from StrandiOSApp.init before launch finishes.
         BGTaskSchedulerPermittedIdentifiers:
           - $(PRODUCT_BUNDLE_IDENTIFIER).debugexport
+          - $(PRODUCT_BUNDLE_IDENTIFIER).coachbrief
           # Best-effort fallback that writes already-banked WHOOP data to HealthKit when iOS grants
           # background time. Fresh offloads also write immediately from their completion hook.
           - $(PRODUCT_BUNDLE_IDENTIFIER).healthwriteback
