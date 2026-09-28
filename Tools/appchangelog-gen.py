@@ -16,7 +16,8 @@ A per-version notes file docs/releases/v<VER>.md may carry a YAML front-matter b
         es: "..."
         fr: "..."
         pt-PT: "..."
-        zh: "..."
+        zh: "..."        # Android and Apple Simplified Chinese
+        zh-Hant: "..."   # Apple Traditional Chinese
     ---
     # NOOP v<VER>
     <the full release notes — the GitHub release body; the front-matter is stripped there>
@@ -64,7 +65,7 @@ LOCALE_DIRS = {"en": "values", "de": "values-de", "es": "values-es",
                "fr": "values-fr", "pt-PT": "values-pt-rPT", "zh": "values-zh",
                "pl": "values-pl", "ru": "values-ru", "it": "values-it"}
 APPLE_LOCALES = {"de": "de", "es": "es", "fr": "fr", "pt-PT": "pt-PT",
-                 "pl": "pl", "ru": "ru", "it": "it", "zh-Hans": "zh", "zh-Hant": "zh"}
+                 "pl": "pl", "ru": "ru", "it": "it", "zh-Hans": "zh", "zh-Hant": "zh-Hant"}
 
 
 def title_key(title: str) -> str:

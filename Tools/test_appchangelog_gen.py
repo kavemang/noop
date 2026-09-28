@@ -204,16 +204,16 @@ class AppleTitleTests(unittest.TestCase):
             path.write_text('{\n  "sourceLanguage": "en",\n  "strings": {\n'
                             '        "Existing": {}\n  },\n  "version": "1.0"\n}\n')
             with mock.patch.object(acg, "APPLE_STRINGS", path):
-                acg.write_apple_title("New title", {"de": "Neuer Titel", "zh": "新标题"})
+                acg.write_apple_title("New title", {"de": "Neuer Titel", "zh": "新标题", "zh-Hant": "新標題"})
                 first = path.read_text()
-                acg.write_apple_title("New title", {"de": "Neuer Titel", "zh": "新标题"})
+                acg.write_apple_title("New title", {"de": "Neuer Titel", "zh": "新标题", "zh-Hant": "新標題"})
                 self.assertEqual(first, path.read_text())
-                acg.write_apple_title("New title", {"de": "Aktueller Titel", "zh": "新标题"})
+                acg.write_apple_title("New title", {"de": "Aktueller Titel", "zh": "新标题", "zh-Hant": "新標題"})
             strings = json.loads(path.read_text())["strings"]
             self.assertEqual({}, strings["Existing"])
             self.assertEqual("Aktueller Titel", strings["New title"]["localizations"]["de"]["stringUnit"]["value"])
             self.assertEqual("新标题", strings["New title"]["localizations"]["zh-Hans"]["stringUnit"]["value"])
-            self.assertEqual("新标题", strings["New title"]["localizations"]["zh-Hant"]["stringUnit"]["value"])
+            self.assertEqual("新標題", strings["New title"]["localizations"]["zh-Hant"]["stringUnit"]["value"])
 
 
 class AndroidTitleRefreshTests(unittest.TestCase):
