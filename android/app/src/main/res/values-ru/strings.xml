@@ -928,6 +928,7 @@
     <string name="l10n_stress_screen_hours_h_7610ac7c">%1$sч</string>
     <string name="l10n_stress_screen_no_stress_history_yet_ec962e3c">Истории стресса пока нет</string>
     <string name="l10n_stress_screen_reading_your_heart_rate_variability_and_c0249246">Загружаю ВСР и пульс в покое…</string>
+    <string name="l10n_stress_screen_reading_today_s_heart_rate_7491835a">Загружаю сегодняшний пульс…</string>
     <string name="l10n_stress_screen_resting_hr_26677094">Пульс в покое</string>
     <string name="l10n_stress_screen_start_a_breathe_session_9619e5c0">Начать сеанс дыхания</string>
     <string name="l10n_stress_screen_stress_bad33342">Стресс</string>
@@ -1838,6 +1839,8 @@
     <string name="battery_bedtime_body">Осталось записи на %1$s, а на ночь нужно около %2$s. Зарядите перед сном.</string>
     <string name="battery_runtime_title">Низкий заряд браслета</string>
     <string name="battery_runtime_body">На вашем WHOOP осталось %1$s — зарядите сегодня вечером.</string>
+    <string name="battery_stale_title">WHOOP был с низким зарядом</string>
+    <string name="battery_stale_body">%1$d%% при последнем контакте NOOP, %2$s назад. Зарядите его до ночи.</string>
     <string name="battery_low_title">Низкий заряд</string>
     <string name="battery_low_body">Зарядите WHOOP до наступления ночи.</string>
     <string name="battery_full_title">Браслет полностью заряжен</string>

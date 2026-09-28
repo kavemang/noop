@@ -529,7 +529,7 @@ extension WhoopStore {
                     WHERE deviceId = :d AND ts >= :f AND ts <= :t
                     AND (srcChannel IS NULL OR srcChannel <> :rrx)
                     AND \(sourcePredicate)
-                    AND (tsSuspect IS NULL OR tsSuspect <> 1)   -- #1073: exclude future-stamped beats
+                    AND (tsSuspect IS NULL OR tsSuspect <> 1)   -- exclude future-stamped (#1073) and 500 ms fill (#2371) beats
                     ORDER BY ts ASC, ord ASC, rrMs ASC, seq ASC LIMIT :lim
                     """
             }
@@ -607,6 +607,25 @@ extension WhoopStore {
                         from: Data(json.utf8))) ?? [:]
                     return WhoopEvent(ts: row["ts"], kind: row["kind"], payload: payload)
                 }
+        }
+    }
+
+    /// The most recent banked battery reading, with its charging bit (#2556).
+    ///
+    /// Separate from `batterySamples` because that one projects `ts, soc, mv` and drops `charging`, which
+    /// the table has carried since the column was added and every insert writes. A stale-battery warning
+    /// has to know whether the strap was last seen ON the charger, so it needs the column the existing read
+    /// leaves behind rather than a new one.
+    ///
+    /// Twin of Kotlin `WhoopDao.latestBattery`.
+    public func latestBattery(deviceId: String) async throws -> (ts: Int, soc: Double?, charging: Bool?)? {
+        try syncRead { db in
+            try Row.fetchOne(db, sql: """
+                SELECT ts, soc, charging FROM battery
+                WHERE deviceId = ?
+                ORDER BY ts DESC LIMIT 1
+                """, arguments: [deviceId])
+                .map { (ts: $0["ts"], soc: $0["soc"], charging: $0["charging"]) }
         }
     }
 

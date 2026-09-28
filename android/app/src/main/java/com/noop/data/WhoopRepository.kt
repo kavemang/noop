@@ -584,6 +584,16 @@ class WhoopRepository(
                 dao.promoteWhoop4HistoricalRr(row.deviceId, row.ts, row.rrMs, row.seq, row.ord!!)
             }
         }
+        // #2371: mark the strap's 500 ms fill beats in this batch's window. The batch's heart rate was written
+        // above, so the same-second rate the rule reads is already in the table. Only a batch that carries a
+        // 500 ms WHOOP 5 beat pays for the statement. iOS runs the same statement from `WhoopStore.insert`.
+        val fillTs = rrRows.filter {
+            it.rrMs == 500 && (it.srcChannel == RrSourceChannel.WHOOP5_HISTORICAL.code ||
+                it.srcChannel == RrSourceChannel.WHOOP5_STANDARD.code)
+        }.map { it.ts }
+        val fillFrom = fillTs.minOrNull()
+        val fillTo = fillTs.maxOrNull()
+        if (fillFrom != null && fillTo != null) dao.flagWhoop5RrFill(deviceId, fillFrom, fillTo)
         val evIds = if (streams.events.isEmpty()) emptyList() else
             dao.insertEvents(streams.events.map { EventRow(deviceId, it.ts, it.kind, it.payloadJSON) })
         val batIds = if (streams.battery.isEmpty()) emptyList() else
@@ -713,29 +723,6 @@ class WhoopRepository(
      *  WhoopStore.hrFingerprint(deviceId:from:to:). */
     suspend fun hrFingerprintWindow(deviceId: String, from: Long, to: Long): Pair<Int, Long> =
         Pair(dao.countHrInWindow(deviceId, from, to), dao.maxHrTsInWindow(deviceId, from, to))
-
-    /** The same HR fingerprint over the UNION [hrSamplesUnion] reads, as one opaque string.
-     *
-     * A fingerprint narrower than the read it guards is worse than none: it would serve a cached result
-     * after a backfill landed rows under an alias id, which is exactly the id set [hrSamplesUnion] exists
-     * to cover (#908, a re-added strap banking under its own fresh id). So this walks the same ids rather
-     * than the bare [activeDeviceId].
-     *
-     * Cost is one COUNT plus one MAX per id, index range walks that materialise no rows, against the full
-     * per-day row fetches a caller would otherwise repeat. Compared only to itself in memory, so the
-     * format is free to change.
-     */
-    suspend fun hrFingerprintWindowUnion(activeDeviceId: String, from: Long, to: Long): String {
-        // An explicit loop rather than joinToString: the per-id read suspends and that builder's lambda
-        // is not a suspend function.
-        val parts = StringBuilder()
-        for (id in rawWhoopSourceIds(activeDeviceId)) {
-            val (count, maxTs) = hrFingerprintWindow(id, from, to)
-            if (parts.isNotEmpty()) parts.append('|')
-            parts.append(id).append(':').append(count).append(':').append(maxTs)
-        }
-        return parts.toString()
-    }
 
     /** Whether [deviceId] has ANY heart-rate row in the window, as a scalar EXISTS rather than a fetched
      *  row. The day-owner resolver's per-candidate-per-day probe; see [WhoopDao.hasHrInWindow]. */
@@ -1180,12 +1167,32 @@ class WhoopRepository(
         if (deviceIds.isEmpty()) emptyList()
         else mergeHrByTs(deviceIds.map { dao.hrSamples(it, from, to, limit) })
 
-    /** Count and newest timestamp of measured HR per source [hrSamplesUnion] reads, as one string: an
-     *  index-only witness of whether a window's heart rate changed, without fetching a row. */
+    /** Count and newest timestamp of measured HR per source [hrSamplesUnion] reads, as one opaque string:
+     *  an index-only witness of whether a window's heart rate changed, without fetching a row.
+     *
+     * A fingerprint narrower than the read it guards is worse than none: it would serve a cached result
+     * after a backfill landed rows under an alias id, which is exactly the id set [hrSamplesUnion] exists
+     * to cover (#908, a re-added strap banking under its own fresh id). So this walks the same ids rather
+     * than the bare [activeDeviceId].
+     *
+     * Cost is one COUNT plus one MAX per id via [hrFingerprintWindow], index range walks that materialise
+     * no rows, against the full per-day row fetches a caller would otherwise repeat. Compared only to
+     * itself in memory, so the format is free to change, and no caller persists it. The Swift
+     * `Repository.hrFingerprintUnion` is a twin in ROLE only, encoding the same facts differently; there
+     * is no byte-identity contract between them and no oracle asserting one.
+     *
+     * The single union witness for both callers (#2566): the cycle load cache in
+     * [com.noop.analytics.PhysiologicalStepCycleEngine] and the daytime stress lens memo in
+     * [com.noop.ui.selectedDaytimeStressMode]. Two of these that were free to disagree is what #2566
+     * removed, so route a new caller here rather than adding a third.
+     */
     suspend fun hrUnionFingerprint(activeDeviceId: String, from: Long, to: Long): String {
+        // An explicit loop rather than joinToString: the per-id read suspends and that builder's lambda
+        // is not a suspend function.
         val parts = ArrayList<String>()
         for (id in rawWhoopSourceIds(activeDeviceId)) {
-            parts += "$id=${dao.countHrInWindow(id, from, to)}:${dao.maxHrTsInWindow(id, from, to)}"
+            val (count, maxTs) = hrFingerprintWindow(id, from, to)
+            parts += "$id=$count:$maxTs"
         }
         return parts.joinToString(",")
     }

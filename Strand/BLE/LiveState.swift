@@ -927,7 +927,7 @@ public final class LiveState: ObservableObject {
         #else
         let osName = "macOS"
         #endif
-        var header = "NOOP strap log (scheduled export) — \(osName)\nApp: \(v)\n\(osName): "
+        var header = "NOOP strap log (scheduled export) — \(osName)\nApp: \(Self.appIdentityLine)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
         // #453: the BODY is scrubbed as it is appended, but these header lines come from the diagnostics
         // block and never pass through that path - and they carry device ids, which embed a BLE address
@@ -939,6 +939,29 @@ public final class LiveState: ObservableObject {
         // Same earlier-runs-then-current shape as `exportableLogText()`: a scheduled drop that fires after a
         // restart reports the runs before it, not only the (possibly empty) current one.
         return header + archive.exportText()
+    }
+
+    /// `<version> (<build>) <bundle id>` for the export header.
+    ///
+    /// The build number and the bundle id were both absent (#2553). The build matters because a tester is
+    /// routinely asked to confirm they are on a particular staging build, and the version alone cannot say.
+    /// The bundle id matters because the `.ipa` ships unsigned and a re-signer can rewrite it, which changes
+    /// how Apple Health identifies this app as a source and which background-task identifiers iOS accepts.
+    ///
+    /// The version and build identify nobody. The bundle id is the app's own identifier and normally does
+    /// not either, but `Config/BundleId.xcconfig` exists so someone building from source can set their own
+    /// `BUNDLE_ID_PREFIX`, and that string is whatever they chose. It is printed anyway, and NOT routed
+    /// through `redactPii`, because seeing the real id IS the diagnostic and masking it would defeat the
+    /// point on exactly the builds most likely to need it.
+    ///
+    /// Shared by both header builders on purpose: the two used to construct the same `App:` line
+    /// independently, which is how a field goes into one export and not the other.
+    nonisolated static var appIdentityLine: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let bundleID = Bundle.main.bundleIdentifier ?? "?"
+        return "\(version) (\(build)) \(bundleID)"
     }
 
     /// Scrub personal identifiers from a strap-log line so it's safe to share publicly (#445): BLE MAC
@@ -1148,7 +1171,7 @@ public final class LiveState: ObservableObject {
         #else
         let osName = "macOS"
         #endif
-        var header = "NOOP strap log - \(osName)\nApp: \(v)\n\(osName): "
+        var header = "NOOP strap log - \(osName)\nApp: \(Self.appIdentityLine)\n\(osName): "
             + ProcessInfo.processInfo.operatingSystemVersionString + "\n"
         #if os(iOS)
         let diagLines = IOSDiagnostics.capture().summaryLines()

@@ -1169,6 +1169,15 @@ final class Repository: ObservableObject {
         return byTs.values.sorted { $0.ts < $1.ts }
     }
 
+    /// The most recent banked battery reading, for the stale-battery warning (#2556).
+    ///
+    /// Reads the ACTIVE device id rather than the union: a battery reading belongs to the strap that sent
+    /// it, and warning about one strap's charge using another's reading is the #1706 mistake.
+    func latestBattery() async -> (ts: Int, soc: Double?, charging: Bool?)? {
+        guard let store = await ensureStore() else { return nil }
+        return try? await store.latestBattery(deviceId: deviceId)
+    }
+
     /// The HR fingerprint over the UNION `hrSamples(from:to:limit:)` reads, as one opaque string.
     ///
     /// A fingerprint narrower than the read it guards is worse than none: it would let a caller reuse a
@@ -1178,7 +1187,10 @@ final class Repository: ObservableObject {
     /// Cost is one COUNT plus one MAX per id, straight over the `(deviceId, ts)` index with no rows
     /// materialized, against the per-day row fetches a caller would otherwise repeat. Compared only to
     /// itself in memory, so the format is free to change. Kotlin twin:
-    /// `WhoopRepository.hrFingerprintWindowUnion`.
+    /// `WhoopRepository.hrUnionFingerprint`, which is a twin in ROLE only: each side compares its own
+    /// value against its own previous value, neither is persisted or sent anywhere, and the two encode
+    /// the same facts differently. There is no byte-identity contract here and no oracle asserting one,
+    /// so do not "align" the encodings on the assumption that there is.
     func hrFingerprintUnion(from: Int, to: Int) async -> String {
         guard let store = await ensureStore() else { return "" }
         var parts: [String] = []
