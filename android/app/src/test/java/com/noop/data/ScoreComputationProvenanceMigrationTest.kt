@@ -31,9 +31,9 @@ class ScoreComputationProvenanceMigrationTest {
                 assertFalse("migration must not contain $banned", upper.contains(banned))
             }
         }
-        assertEquals(40, WhoopDatabase.MIGRATION_40_41.startVersion)
-        assertEquals(41, WhoopDatabase.MIGRATION_40_41.endVersion)
-        assertEquals(41, WhoopDatabase.SCHEMA_VERSION)
+        assertEquals(41, WhoopDatabase.MIGRATION_41_42.startVersion)
+        assertEquals(42, WhoopDatabase.MIGRATION_41_42.endVersion)
+        assertEquals(42, WhoopDatabase.SCHEMA_VERSION)
     }
 
     @Test
