@@ -870,7 +870,8 @@ private fun DeviceCard(
                 BatteryTube(pct = liveBatteryPct)
             }
             if (clockStatus != null) {
-                Text("Clock: $clockStatus", style = NoopType.footnote, color = Palette.textSecondary)
+                Text(stringResource(R.string.connection_clock_status, clockStatus),
+                    style = NoopType.footnote, color = Palette.textSecondary)
             }
             if (clockWarning != null) {
                 Text(clockWarning, style = NoopType.footnote, color = Palette.textSecondary)
