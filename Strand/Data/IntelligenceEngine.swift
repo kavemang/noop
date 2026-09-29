@@ -892,12 +892,24 @@ final class IntelligenceEngine: ObservableObject {
         // refresh last ran (4000 vs 120 days). This mirrors the Android port's `days(importedDeviceId)`.
         let hist = ((try? await store.dailyMetrics(deviceId: deviceId, from: "0000-01-01", to: "9999-12-31")) ?? [])
             .sorted { $0.day < $1.day }
+        // #2126: pre-label WHOOP 5 R-R rows used a different unit interpretation. Keep their
+        // displayed nights, but never let those HRV values judge nights scored from labelled beats.
+        // foldHistory compares UTC-midnight day keys, so encode the first beat's LOCAL day as the
+        // UTC midnight of that day key (the same convention used by the manual epoch).
+        let hrvRegimeEpoch: Double
+        if (try? await store.isWhoop5RRSource(deviceId: regActiveId)) == true,
+           let first = try? await store.firstScorableWhoop5RRTimestamp(deviceId: regActiveId) {
+            hrvRegimeEpoch = Double(Self.midnightUtc(first + tzOffset))
+        } else {
+            hrvRegimeEpoch = 0
+        }
+        let hrvEpoch = max(Baselines.hrvBaselineEpoch(), hrvRegimeEpoch)
         // HRV baseline honours the manual "Recalibrate baseline" epoch (noop.hrvBaselineEpoch); the
         // resting-HR baseline honours the Charge-wide sibling (noop.recoveryBaselineEpoch). Pass the
         // per-value "yyyy-MM-dd" day keys (parallel to the values) so foldHistory can drop every night
-        // before the epoch. A 0 / absent epoch makes this byte-identical to the plain fold, so scoring is
-        // unchanged until the user taps Recalibrate.
-        let hrvBase1 = Baselines.foldHistory(hist.map { $0.avgHrv }, dayKeys: hist.map { $0.day }, cfg: hrvCfg)
+        // before the later of the manual and WHOOP 5 unit-regime epochs.
+        let hrvBase1 = Baselines.foldHistory(hist.map { $0.avgHrv }, dayKeys: hist.map { $0.day },
+                                             cfg: hrvCfg, baselineEpoch: hrvEpoch)
         let rhrBase1 = Baselines.foldHistory(hist.map { $0.restingHr.map(Double.init) }, dayKeys: hist.map { $0.day },
                                              cfg: rhrCfg, baselineEpoch: Baselines.recoveryBaselineEpoch())
         let baselines1 = AnalyticsEngine.ProfileBaselines(hrv: hrvBase1, restingHR: rhrBase1)
@@ -2021,11 +2033,9 @@ final class IntelligenceEngine: ObservableObject {
         // burying the rest of the export. The whole history is still folded, so the state is unchanged
         // and the trace cannot describe a baseline the scorer is not using.
         //
-        // The epoch is read ONCE, here, and handed to BOTH folds. Baselines+Trace is deliberately pure so
-        // it cannot read the pref itself, and letting the scored fold take its UserDefaults default while
-        // the trace read its own copy would leave a window - however small - where a diagnostic describes
-        // a fold the score did not perform. Passing it explicitly below is byte-identical to that default.
-        let hrvEpoch = Baselines.hrvBaselineEpoch()
+        // The effective epoch was computed once before pass 1 and is handed to BOTH folds and this trace.
+        // Baselines+Trace is deliberately pure; a separate preference read here could describe a fold
+        // other than the one the scorer actually performed.
         if TestCentre.active(.recovery) {
             let traced = Baselines.foldHistoryTrace(hrvSeq, dayKeys: hrvDayKeys, cfg: hrvCfg,
                                                     metric: "hrv",
