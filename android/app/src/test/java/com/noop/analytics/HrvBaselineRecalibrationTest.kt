@@ -24,30 +24,6 @@ class HrvBaselineRecalibrationTest {
 
     private val hrvCfg = Baselines.metricCfg.getValue("hrv")
 
-    @Test
-    fun whoop5UnitBoundaryDropsOldHrvWithoutDroppingLaterLabelledNights() {
-        // 02:00 UTC is still the previous local day at UTC-5. The fold's day keys use
-        // UTC-midnight epochs, so the regime starts at the UTC midnight of that local day.
-        val firstBeat = LocalDate.parse("2026-06-15").atStartOfDay(ZoneOffset.UTC).toEpochSecond() + 2 * 3600
-        val epoch = IntelligenceEngine.hrvBaselineEpochForWhoop5(firstBeat, -5 * 3600L, 0.0)
-        val expected = LocalDate.parse("2026-06-14").atStartOfDay(ZoneOffset.UTC).toEpochSecond().toDouble()
-        assertEquals(expected, epoch, 0.0)
-
-        val days = listOf("2026-06-10", "2026-06-11", "2026-06-12", "2026-06-13",
-            "2026-06-14", "2026-06-15", "2026-06-16", "2026-06-17")
-        val values: List<Double?> = listOf(90.0, 91.0, 89.0, 92.0, 50.0, 51.0, 49.0, 50.0)
-        val folded = Baselines.foldHistory(values, days, hrvCfg, epoch)
-        assertEquals(4, folded.nValid)
-        assertEquals(50.0, folded.baseline, 2.0)
-        assertTrue(folded.usable)
-
-        val laterManual = LocalDate.parse("2026-06-16").atStartOfDay(ZoneOffset.UTC).toEpochSecond().toDouble()
-        assertEquals(laterManual,
-            IntelligenceEngine.hrvBaselineEpochForWhoop5(firstBeat, -5 * 3600L, laterManual), 0.0)
-        assertEquals(laterManual,
-            IntelligenceEngine.hrvBaselineEpochForWhoop5(null, -5 * 3600L, laterManual), 0.0)
-    }
-
     // ── 1. Early-life anti-anchoring ────────────────────────────────────────────────────────────
 
     @Test

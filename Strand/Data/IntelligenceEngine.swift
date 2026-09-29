@@ -892,6 +892,8 @@ final class IntelligenceEngine: ObservableObject {
         // refresh last ran (4000 vs 120 days). This mirrors the Android port's `days(importedDeviceId)`.
         let hist = ((try? await store.dailyMetrics(deviceId: deviceId, from: "0000-01-01", to: "9999-12-31")) ?? [])
             .sorted { $0.day < $1.day }
+        let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
+        let regActiveId = (try? registry.activeDeviceId()) ?? deviceId
         // #2126: pre-label WHOOP 5 R-R rows used a different unit interpretation. Keep their
         // displayed nights, but never let those HRV values judge nights scored from labelled beats.
         // foldHistory compares UTC-midnight day keys, so encode the first beat's LOCAL day as the
@@ -938,7 +940,6 @@ final class IntelligenceEngine: ObservableObject {
         // stable for the run. With only the seeded 'my-whoop' row paired (the default and every
         // single-WHOOP install) the active strap is `deviceId`, so `resolveDayOwner` below returns
         // `deviceId` for every day and the per-day reads are byte-identical to the pre-I2 behaviour.
-        let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
         // #1567: `try?` used to swallow this read, and an empty device list is NOT a neutral outcome —
         // every day then resolves to `.whoop5` (see `skinTempFamily(forOwner:devices:)`), so a WHOOP 4.0's
         // raw skin-temp ADC is read as centidegrees, misses the 28–42 °C worn gate, and the night yields
@@ -953,7 +954,6 @@ final class IntelligenceEngine: ObservableObject {
             regDevices = []
             diagnosticSink?(AnalyticsEngine.registryUnavailableLine(importedDeviceId: deviceId), nil)
         }
-        let regActiveId = (try? registry.activeDeviceId()) ?? deviceId
 
         // Floor `now` to LOCAL midnight (#277) so each `dayStart` lands on a local-day boundary and the
         // day keys are LOCAL calendar days, consistent with the dashboard's local "today" lookup. A

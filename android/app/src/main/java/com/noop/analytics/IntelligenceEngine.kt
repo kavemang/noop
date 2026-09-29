@@ -526,8 +526,18 @@ object IntelligenceEngine {
                     stepsMotionCachePersisted = raw
                 }
             }
+            // Resolve the unit-regime boundary outside analyzeRecentOnCpu: that method is close to
+            // its JaCoCo bytecode budget, and both the initial and heal pass must fold the same era.
+            val offsetSec = java.util.TimeZone.getDefault().getOffset(nowSeconds * 1_000L) / 1_000L
+            val owner = ownerSource?.candidatePriorities()?.firstOrNull { it.second == 0 }?.first ?: importedDeviceId
+            val firstLabelledBeat = if (repo.isWhoop5RrSource(owner)) repo.firstScorableWhoop5RrTs(owner) else null
+            // foldHistory compares UTC-midnight day keys. Convert the beat's local day to the
+            // UTC midnight of that day key, then keep whichever cut is later.
+            val hrvEpoch = firstLabelledBeat?.let {
+                maxOf(baselineEpoch, midnightUtc(it + offsetSec).toDouble())
+            } ?: baselineEpoch
             val (out, healed) = analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride,
-                nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch,
+                nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, hrvEpoch,
                 recoveryEpoch, diag, useExperimentalSleepV2, useMotionAwareWake, sleepTraceSink, recoveryTraceSink,
                 stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow,
                 spo2CandidateDisplay, effortMethod, dayCycleMode)
@@ -538,7 +548,7 @@ object IntelligenceEngine {
             // re-scores the window against the cleaned store; its own heal then finds nothing (the duplicates
             // are gone), so this can never loop. Mirrors the Swift pendingForcedRescore re-arm.
             else analyzeRecentOnCpu(repo, profile, maxDays, importedDeviceId, maxHROverride,
-                nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, baselineEpoch,
+                nowSeconds, ownerSource, manualStepCoefficient, persistStepsCalibration, hrvEpoch,
                 recoveryEpoch, diag, useExperimentalSleepV2, useMotionAwareWake, sleepTraceSink, recoveryTraceSink,
                 stepsTraceSink, universalSink, workoutsTraceSink, hrvTraceSink, deepHrvWindow,
                 spo2CandidateDisplay, effortMethod, dayCycleMode).first
@@ -702,9 +712,6 @@ object IntelligenceEngine {
         // The durable fix is the Swift shape — `analyzeRecent` reads `registry.all()` itself (:623), so no
         // caller CAN omit it — but that changes this signature and every caller, so it is left as follow-up.
         val candidatePriorities = ownerSource?.candidatePriorities().orEmpty()
-        // #2126: the first labelled WHOOP 5 beat begins a new HRV unit regime. The fold compares
-        // UTC-midnight day keys, so the boundary is the UTC midnight of that beat's local day.
-        val hrvEpoch = whoop5HrvRegimeEpoch(repo, candidatePriorities, importedDeviceId, tzOffsetSeconds, baselineEpoch)
         if (ownerSource == null) {
             diag(ownerSourceAbsentLine(importedDeviceId))
         }
@@ -733,7 +740,7 @@ object IntelligenceEngine {
         // HRV baseline honours the manual "Recalibrate baseline" epoch (noop.hrvBaselineEpoch): pass the
         // per-value "yyyy-MM-dd" day keys (parallel to the values) so foldHistory drops every night before
         // the later of the manual recalibration and WHOOP 5 unit-regime epochs.
-        val hrvBase1 = Baselines.foldHistory(hist.map { it.avgHrv }, hist.map { it.day }, hrvCfg, hrvEpoch)
+        val hrvBase1 = Baselines.foldHistory(hist.map { it.avgHrv }, hist.map { it.day }, hrvCfg, baselineEpoch)
         val rhrBase1 = Baselines.foldHistory(hist.map { it.restingHr?.toDouble() }, hist.map { it.day }, rhrCfg, recoveryEpoch)
         val baselines1 = ProfileBaselines(hrv = hrvBase1, restingHR = rhrBase1)
 
@@ -1545,9 +1552,9 @@ object IntelligenceEngine {
         // A 0.0 epoch is byte-identical to the plain fold, so scoring is unchanged until the user taps it.
         // #1614: the per-night HRV fold, traced (see [emitHrvFoldTrace] for scope and why it is a call
         // rather than an inline lambda). Sits immediately above the fold it describes, and takes the SAME
-        // hrvEpoch, so the trace can only ever describe the fold the scorer actually performed.
-        emitHrvFoldTrace(recoveryTraceSink, hrvSeq, hrvDayKeys, hrvCfg, hrvEpoch)
-        val hrvBase2 = Baselines.foldHistory(hrvSeq, hrvDayKeys, hrvCfg, hrvEpoch)
+        // baselineEpoch, so the trace can only ever describe the fold the scorer actually performed.
+        emitHrvFoldTrace(recoveryTraceSink, hrvSeq, hrvDayKeys, hrvCfg, baselineEpoch)
+        val hrvBase2 = Baselines.foldHistory(hrvSeq, hrvDayKeys, hrvCfg, baselineEpoch)
         val rhrBase2 = Baselines.foldHistory(rhrSeq, rhrDayKeys, rhrCfg, recoveryEpoch)
         // Resp baseline: WITHIN one brand it still mixes imported (cloud) values with on-device RSA
         // estimates, which stays an accepted tradeoff (the z-score is scale-tolerant and foldHistory
@@ -3004,19 +3011,6 @@ object IntelligenceEngine {
     private suspend fun activeWhoop5RrPolicy(
         repo: com.noop.data.WhoopRepository, candidates: List<Pair<String, Int>>, fallback: String,
     ): Boolean = repo.isWhoop5RrSource(candidates.firstOrNull { it.second == 0 }?.first ?: fallback)
-
-    private suspend fun whoop5HrvRegimeEpoch(
-        repo: com.noop.data.WhoopRepository, candidates: List<Pair<String, Int>>,
-        fallback: String, offsetSec: Long, manualEpoch: Double,
-    ): Double {
-        val owner = candidates.firstOrNull { it.second == 0 }?.first ?: fallback
-        if (!repo.isWhoop5RrSource(owner)) return manualEpoch
-        return hrvBaselineEpochForWhoop5(repo.firstScorableWhoop5RrTs(owner), offsetSec, manualEpoch)
-    }
-
-    internal fun hrvBaselineEpochForWhoop5(firstScorableTs: Long?, offsetSec: Long, manualEpoch: Double): Double =
-        if (firstScorableTs == null) manualEpoch
-        else maxOf(manualEpoch, midnightUtc(firstScorableTs + offsetSec).toDouble())
 
     /** Keep both stream witnesses and the R-R alias policy in the nightly cache key (#29).
      * The two database awaits live here to preserve the scoring method's instrumentation budget. */
