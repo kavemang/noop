@@ -238,6 +238,24 @@ public enum ConnectionReadout {
         return "no (waiting for the strap clock)"
     }
 
+    /// The current link's clock evidence, including future-dated and stale records. A post-1972
+    /// timestamp alone is not proof that the clock is right (#2091). Twin of Kotlin clockStatusLabel.
+    public static func clockStatusLabel(deviceClockUnix: Int?, strapNewestUnix: Int?, nowUnix: Int) -> String {
+        guard deviceClockUnix != nil || strapNewestUnix != nil else { return "waiting for clock evidence" }
+        func verdict(_ unix: Int) -> String {
+            ConnectionTrace.clockVerdict(aheadSeconds: unix - nowUnix, newestUnix: unix,
+                                         futureToleranceSeconds: 120,
+                                         behindToleranceSeconds: ConnectionTrace.behindToleranceDefault)
+        }
+        let clock = deviceClockUnix.map(verdict)
+        let record = strapNewestUnix.map(verdict)
+        if clock?.contains("FUTURE-DATED") == true || record?.contains("FUTURE-DATED") == true { return "future-dated" }
+        if clock?.contains("RTC-EPOCH") == true { return "RTC reads 1970/71" }
+        if record?.contains("RTC-EPOCH") == true { return "records dated 1970/71" }
+        if record?.contains("CLOCK-WARNING") == true { return "record is over 48h old" }
+        return strapNewestUnix != nil ? "records dated normally" : "clock OK"
+    }
+
     /// #1818: at or above this charge the "charge it" remedy is already satisfied, so repeating it is
     /// noise. Twin of the Kotlin constant - the two must move together or the platforms give
     /// different advice for the same strap.

@@ -226,6 +226,18 @@ final class ConnectionReadoutTests: XCTestCase {
                      "no signal seen yet must not fabricate a fault")
     }
 
+    func testClockStatusRejectsFutureDatedRecords() {
+        XCTAssertEqual(ConnectionReadout.clockStatusLabel(deviceClockUnix: nil,
+                                                         strapNewestUnix: 1_800_003_600,
+                                                         nowUnix: 1_800_000_000), "future-dated")
+        XCTAssertEqual(ConnectionReadout.clockStatusLabel(deviceClockUnix: nil,
+                                                         strapNewestUnix: 40_000_000,
+                                                         nowUnix: 1_800_000_000), "records dated 1970/71")
+        XCTAssertEqual(ConnectionReadout.clockStatusLabel(deviceClockUnix: nil,
+                                                         strapNewestUnix: 1_799_999_990,
+                                                         nowUnix: 1_800_000_000), "records dated normally")
+    }
+
     /// #1818: the remedy must track the battery. A charged strap told to "charge to 100%" is the bug
     /// the field report hit - the user had already done it, twice.
     func testRtcWarningRemedyTracksBattery() {

@@ -229,6 +229,14 @@ class ConnectionReadoutTest {
         assertNull(ConnectionReadout.rtcWarning(null, null))
     }
 
+    @Test fun clockStatusClassifiesBothCurrentLinkSignals() {
+        val now = 1_800_000_000L
+        assertEquals("future-dated", ConnectionReadout.clockStatusLabel(null, now + 3_600, now))
+        assertEquals("records dated 1970/71", ConnectionReadout.clockStatusLabel(null, 40_000_000L, now))
+        assertEquals("RTC reads 1970/71", ConnectionReadout.clockStatusLabel(40_000_000L, now - 10, now))
+        assertEquals("records dated normally", ConnectionReadout.clockStatusLabel(null, now - 10, now))
+    }
+
     /** #1818: the remedy must track the battery. A charged strap told to "charge to 100%" is the bug
      *  the field report hit - the user had already done it, twice. Twin of the Swift test. */
     @Test fun rtcWarningRemedyTracksBattery() {

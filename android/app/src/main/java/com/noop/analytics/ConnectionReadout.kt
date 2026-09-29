@@ -254,6 +254,27 @@ object ConnectionReadout {
         return "no (waiting for the strap clock)"
     }
 
+    /** The current link's clock evidence, including future-dated and stale records. A post-1972
+     * timestamp alone is not proof that the clock is right (#2091). Twin of Swift clockStatusLabel. */
+    fun clockStatusLabel(deviceClockUnix: Long?, strapNewestUnix: Long?, nowUnix: Long): String {
+        if (deviceClockUnix == null && strapNewestUnix == null) return "waiting for clock evidence"
+        fun verdict(unix: Long) = ConnectionTrace.clockVerdict(
+            aheadSeconds = unix - nowUnix, newestUnix = unix,
+            futureToleranceSeconds = 120L,
+            behindToleranceSeconds = ConnectionTrace.BEHIND_TOLERANCE_DEFAULT,
+        )
+        val clock = deviceClockUnix?.let(::verdict)
+        val record = strapNewestUnix?.let(::verdict)
+        return when {
+            clock?.contains("FUTURE-DATED") == true || record?.contains("FUTURE-DATED") == true -> "future-dated"
+            clock?.contains("RTC-EPOCH") == true -> "RTC reads 1970/71"
+            record?.contains("RTC-EPOCH") == true -> "records dated 1970/71"
+            record?.contains("CLOCK-WARNING") == true -> "record is over 48h old"
+            strapNewestUnix != null -> "records dated normally"
+            else -> "clock OK"
+        }
+    }
+
     /** #1818: at or above this charge the "charge it" remedy is already satisfied, so repeating it is
      *  noise. Twin of the Swift constant - the two must move together or the platforms give different
      *  advice for the same strap. */
