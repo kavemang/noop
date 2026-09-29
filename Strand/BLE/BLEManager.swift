@@ -1465,6 +1465,15 @@ public final class BLEManager: NSObject, ObservableObject {
                 self.deviceId = activeId
             }
         }
+        // Restore the ECG latch for THIS device now that `deviceId` has settled for the launch. Done
+        // here rather than at init because the id is not known that early, and the latch is per device.
+        // Read-only: nothing is sent to the strap, matching the rule that these opcodes are never
+        // written automatically. It only keeps Stop reachable and says so in the log.
+        ecgMayBeRunning = UserDefaults.standard.bool(forKey: BLEManager.ecgRunningKey(deviceId))
+        if ecgMayBeRunning {
+            log("ECG probe: a capture was still latched for \(deviceId) at launch — the strap may still "
+                + "be generating; Stop stays available on the Devices card")
+        }
         // Look up the active device's real brand/model instead of a hardcoded string — this predated
         // multi-device support and mislabeled every non-"WHOOP 4.0" device (a WHOOP 5.0/MG strap, an Oura
         // ring, …) with the same literal "WHOOP 4.0". `device.name` has no production reader today (only
@@ -4328,13 +4337,36 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Latched by `ecgStartCapture()`, cleared by a completed `ecgStopCapture()`.
     ///
-    /// Keeps the Devices "Stop" control reachable after the Experimental opt-in has been switched off:
-    /// without it, turning the toggle off while DISCONNECTED silently no-ops (the stop needs a live MG
-    /// link) and then the menu entry vanishes with the opt-in, leaving no route to stop a strap that may
-    /// still be streaming. Deliberately NOT persisted — the claim that the strap forgets these toggles
-    /// across a disconnect is unverified, so this survives only as long as the process, and the honest
-    /// remedy after a relaunch is to re-enable the opt-in and hit Stop.
-    private(set) var ecgMayBeRunning = false
+    /// PERSISTED, because the strap's state is. A capture keeps generating across an app kill, and iOS
+    /// kills this app in the background routinely, so an in-memory latch that resets to `false` on
+    /// launch hides a running capture: the Devices card stops offering Stop and nothing tells the
+    /// wearer their strap is still streaming. The opt-in flag alone does not cover it, because a wearer
+    /// who switches the experiment off after starting loses the control entirely.
+    ///
+    /// Keyed on `deviceId` rather than one global flag: a per-install key lies on a two-strap install,
+    /// claiming the SECOND strap may be generating after a capture that ran on the first.
+    ///
+    /// A switch of active WHOOP mid-capture therefore clears the NEW device's key and leaves the old
+    /// one latched. That reads like a leak and is not: the first strap genuinely never received a stop,
+    /// so it may well still be generating, and the next launch that selects it should say so.
+    ///
+    /// `@Published` because the launch restore below has nothing else to ride on. Setting this from
+    /// `ecgStartCapture` happened to reach the Devices card only because published state changed in the
+    /// same breath (probe steps, log lines); a restore during bootstrap publishes nothing on its own, so
+    /// the card would keep Stop hidden while the strap was still generating.
+    @Published private(set) var ecgMayBeRunning = false {
+        didSet {
+            guard ecgMayBeRunning != oldValue else { return }
+            UserDefaults.standard.set(ecgMayBeRunning, forKey: BLEManager.ecgRunningKey(deviceId))
+        }
+    }
+
+    /// Per-device key for the latch above. Never a shared key: see the note there.
+    ///
+    /// `nonisolated` because it is a pure function of its argument and touches no actor state. Without
+    /// it the key derivation inherits the type's main-actor isolation, which makes it uncallable from a
+    /// synchronous test and says something untrue about what it needs.
+    nonisolated static func ecgRunningKey(_ deviceId: String) -> String { "noopEcgMayBeRunning.\(deviceId)" }
 
     /// The conditions an ECG action needs, checked BEFORE a run is opened so a rejected action leaves no
     /// "waiting…" sheet sitting for the length of the listen window. `send()` re-checks independently —
@@ -4408,6 +4440,31 @@ public final class BLEManager: NSObject, ObservableObject {
         ecgMayBeRunning = true      // latched BEFORE the sends, so a mid-sequence drop still leaves Stop offered
         beginEcgProbeRun(clearingSteps: true)
         log("ECG probe: starting the ECG turn-on sequence on an MG (experimental, unvalidated instrumentation)")
+        // Clear a historical drain BEFORE asking for a realtime trace. OpenStrap Edge's prepare step
+        // sends ABORT_HISTORICAL_TRANSMITS (20) ahead of the wrist selector, and the reason is
+        // mechanical rather than protocol-deep: an offload already in flight is competing for the same
+        // link, so a filtered trace requested underneath one can be acked and still never arrive. That
+        // is indistinguishable, from this side, from `acceptedButSilent` — which is the verdict this
+        // probe has been returning.
+        //
+        // Conditioned on `backfilling` rather than sent unconditionally, which keeps the 5/MG allowlist
+        // clause for opcode 20 exactly as it is: it admits the opcode only while an offload is actually
+        // running, so a default install still cannot form these bytes. When nothing is draining there is
+        // nothing to clear and the abort would be noise.
+        //
+        // Deliberately NOT recorded as a probe Step. Steps feed the verdict, and a FAILURE here (an
+        // abort the firmware declines) would classify the run as `commandRefused` and mask the ECG
+        // outcome the run exists to establish. `abortBackfill`'s own log carries the diagnostic.
+        //
+        // Through `abortBackfill()` rather than writing opcode 20 here, which is the whole point: that
+        // function sends the same `[0x00]` body the allowlist admits AND calls `exitBackfilling`. The
+        // raw send alone would stop the strap while leaving `backfilling` true on this side, so the
+        // session would sit waiting for records that are never coming — the stuck sync the opcode
+        // exists to prevent.
+        if backfilling {
+            log("ECG probe: an offload is in flight and would compete with the realtime trace; aborting it first")
+            abortBackfill()
+        }
         sendEcgCommand(.toggleLabradorFiltered, arg: 1)
         sendEcgCommand(.toggleLabradorRawSave, arg: 1)
         sendEcgCommand(.toggleLabradorDataGeneration, arg: Whoop5Ecg.ControlSignal.start.rawValue)
