@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import com.noop.BuildConfig
 
 /**
  * The Android environment-header block (spec section 3.4), bringing Android to the same shape as the iOS
@@ -17,6 +18,22 @@ import android.os.PowerManager
  * gracefully, never fabricates a value it can't read.
  */
 object AndroidDiagnostics {
+
+    /**
+     * `App:     <version> (<tier>) build <code> <applicationId>` for every export header.
+     *
+     * The applicationId was missing (#2553, Apple twin in `LiveState.appIdentityLine`). It is not decoration
+     * here: the id varies across the four builds this project ships (`com.noop.whoop`, plus `.debug`,
+     * `.staging` and `.demo` suffixes), and `.staging` is a SIDE-INSTALL, so a wearer can be running prod and
+     * staging at once. Two exports from that phone otherwise differ only by tier, and the id is what says
+     * which install produced the log.
+     *
+     * One property rather than three copies: the three header builders each wrote this line out themselves,
+     * which is how a field lands in one export and not the others.
+     */
+    val appIdentityLine: String
+        get() = "App:     ${BuildConfig.VERSION_NAME} (${BuildConfig.TIER}) " +
+            "build ${BuildConfig.VERSION_CODE} ${BuildConfig.APPLICATION_ID}"
 
     /** Aux rows read for one night's SpO2-candidate line (#112). Twin of the Swift
      *  `DebugDataDiagnostics.spo2CandidateAuxLimit`. */
@@ -682,9 +699,21 @@ object AndroidDiagnostics {
                     if (reportedAt > 0L) rl += " · read ${relTime(System.currentTimeMillis() - reportedAt)}"
                     add(rl)
                     // The bytes the epoch was decoded from: what tells a stored stale alarm from a misdecode.
-                    p.getString("alarm.lastReportedRaw", null)
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { add("Readback frame: $it") }
+                    // #1707 started banking the frame on 2026-08-28, so a readback taken before that has an
+                    // epoch and no frame. Printing nothing there read as "the frame was checked and was
+                    // fine", and a 2045 readback in a 2026-09-28 capture cost a trip through git history to
+                    // explain. Say which of the two it is, the way the strap-clock verdict above says why it
+                    // abstains rather than printing no line at all.
+                    val reportedRaw = p.getString("alarm.lastReportedRaw", null)?.takeIf { it.isNotBlank() }
+                    add(
+                        if (reportedRaw != null) {
+                            "Readback frame: $reportedRaw"
+                        } else {
+                            "Readback frame: not stored (this readback predates the frame capture, or the " +
+                                "write failed), so a genuinely-stored stale alarm cannot be told from a " +
+                                "misdecode of a fixed response field here"
+                        },
+                    )
                 } else add("Strap reports: (no readback)")
             } else add("Last arm: never")
             // #1: did the strap actually fire? (STRAP_DRIVEN_ALARM_EXECUTED)
