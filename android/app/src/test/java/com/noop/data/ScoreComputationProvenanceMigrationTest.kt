@@ -2,7 +2,6 @@ package com.noop.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,7 +58,6 @@ class ScoreComputationProvenanceMigrationTest {
         assertTrue(rows.all { it.computedBy == stamp.computedBy })
         assertTrue(rows.all { it.computedAt == stamp.computedAt })
         assertTrue(rows.all { it.scope == "score-window" })
-        assertEquals(ScoreComputationScope.METRIC_SERIES, ScoreComputationScope.fromStorageId("metric-series"))
-        assertNull(ScoreComputationScope.fromStorageId("future-scope"))
+        assertEquals("metric-series", ScoreComputationScope.METRIC_SERIES.storageId)
     }
 }

@@ -456,6 +456,7 @@ interface WhoopDao : DeviceRegistryDao {
     @Upsert
     suspend fun upsertScoreInputProvenance(rows: List<ScoreInputProvenanceRow>)
 
+    // Swift twin: `WhoopStore.upsertComputationProvenance` (same SQLite upsert effect; Room batches rows).
     @Upsert
     suspend fun upsertScoreComputationProvenance(rows: List<ScoreComputationProvenanceRow>)
 
@@ -464,16 +465,6 @@ interface WhoopDao : DeviceRegistryDao {
             "WHERE deviceId = :deviceId AND day = :day AND key = :key"
     )
     suspend fun scoreInputSource(deviceId: String, day: String, key: String): String?
-
-    @Query(
-        "SELECT * FROM scoreComputationProvenance " +
-            "WHERE deviceId = :deviceId AND day = :day AND `key` = :key"
-    )
-    suspend fun scoreComputationProvenance(
-        deviceId: String,
-        day: String,
-        key: String,
-    ): ScoreComputationProvenanceRow?
 
     @Query(
         "DELETE FROM scoreInputProvenance " +
@@ -495,6 +486,7 @@ interface WhoopDao : DeviceRegistryDao {
 
     /** Persist a metric-series batch and its specialized provenance in one transaction. Used by weekly
      *  VO₂max so a method label can never describe an older/newer value after a partial write. */
+    // Swift twin: `WhoopStore.persistMetricSeriesWithProvenance`.
     @Transaction
     suspend fun upsertMetricSeriesWithProvenance(
         rows: List<MetricSeriesRow>,
@@ -524,6 +516,7 @@ interface WhoopDao : DeviceRegistryDao {
      * weekly estimator provenance is owned by [upsertMetricSeriesWithProvenance] and survives this daily
      * window replacement; otherwise a normal re-score would erase the prior two Saturdays' method tags.
      */
+    // Swift twin: `WhoopStore.persistComputedScores`.
     @Transaction
     suspend fun replaceComputedScoreWindow(
         deviceId: String,

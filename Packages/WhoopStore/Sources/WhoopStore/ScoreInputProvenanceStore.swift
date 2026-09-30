@@ -51,27 +51,9 @@ public struct ScoreComputationStamp: Equatable, Codable, Sendable {
         self.computedAt = computedAt
     }
 
+    // Kotlin twin: `ScoreComputationStamp.buildIdentity`.
     public static func buildIdentity(platform: String, appVersion: String, appBuild: String) -> String {
         "\(platform):\(appVersion)+\(appBuild)"
-    }
-}
-
-/// Build provenance for one persisted computed score cell. Missing means the value predates tier 3 or the
-/// metadata could not be committed; callers and export analysis must preserve that honest unknown state.
-public struct ScoreComputationProvenanceRow: Equatable, Codable, Sendable {
-    public let day: String
-    public let key: String
-    public let computedBy: String
-    public let computedAt: Int64
-    public let scope: ScoreComputationScope
-
-    public init(day: String, key: String, computedBy: String, computedAt: Int64,
-                scope: ScoreComputationScope) {
-        self.day = day
-        self.key = key
-        self.computedBy = computedBy
-        self.computedAt = computedAt
-        self.scope = scope
     }
 }
 
@@ -80,6 +62,7 @@ extension WhoopStore {
     /// Replacing daily-score provenance in the scoring window prevents stale attribution when a metric
     /// disappears or changes provider; independently-owned weekly VO₂max method tags survive. Any write
     /// failure rolls back both scores and metadata.
+    // Kotlin twin: `WhoopDao.replaceComputedScoreWindow`.
     public func persistComputedScores(
         dailyMetrics: [DailyMetric],
         metricPoints: [MetricPoint],
@@ -143,6 +126,7 @@ extension WhoopStore {
 
     /// Persist a metric-series batch and its specialized provenance in one SQLite transaction. Used by
     /// weekly VO₂max so a method label can never describe an older/newer value after a partial write.
+    // Kotlin twin: `WhoopDao.upsertMetricSeriesWithProvenance`.
     public func persistMetricSeriesWithProvenance(
         points: [MetricPoint],
         provenance: [ScoreInputProvenanceRow],
@@ -166,24 +150,7 @@ extension WhoopStore {
         }
     }
 
-    /// Which build last computed one stored score cell. Missing is the expected legacy state.
-    public func scoreComputationProvenance(
-        deviceId: String, day: String, key: String
-    ) async throws -> ScoreComputationProvenanceRow? {
-        try syncRead { db in
-            guard let row = try Row.fetchOne(db, sql: """
-                SELECT day, key, computedBy, computedAt, scope
-                FROM scoreComputationProvenance
-                WHERE deviceId = ? AND day = ? AND key = ?
-                """, arguments: [deviceId, day, key]),
-                  let scope = ScoreComputationScope(rawValue: row["scope"] as String)
-            else { return nil }
-            return ScoreComputationProvenanceRow(
-                day: row["day"], key: row["key"], computedBy: row["computedBy"],
-                computedAt: row["computedAt"], scope: scope)
-        }
-    }
-
+    // Kotlin twin: `WhoopDao.upsertScoreComputationProvenance`.
     private static func upsertComputationProvenance(
         day: String, key: String, stamp: ScoreComputationStamp, scope: ScoreComputationScope,
         deviceId: String, in db: Database

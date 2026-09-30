@@ -475,13 +475,7 @@ data class ScoreInputProvenanceRow(
  *  own rows, preserving independently-written weekly/standalone metric-series stamps. */
 enum class ScoreComputationScope(val storageId: String) {
     SCORE_WINDOW("score-window"),
-    METRIC_SERIES("metric-series");
-
-    companion object {
-        fun fromStorageId(value: String): ScoreComputationScope? = entries.firstOrNull {
-            it.storageId == value
-        }
-    }
+    METRIC_SERIES("metric-series")
 }
 
 /** Exact app identity and unix-millisecond instant captured for one computation pass. */
@@ -491,6 +485,7 @@ data class ScoreComputationStamp(
 ) {
     companion object {
         /** Cross-platform build identity. Platform is included because restored backups can cross apps. */
+        // Swift twin: `ScoreComputationStamp.buildIdentity`.
         fun buildIdentity(platform: String, appVersion: String, appBuild: String): String =
             "$platform:$appVersion+$appBuild"
     }

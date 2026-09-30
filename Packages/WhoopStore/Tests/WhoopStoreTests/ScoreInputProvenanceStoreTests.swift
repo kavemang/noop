@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import WhoopStore
 
 final class ScoreInputProvenanceStoreTests: XCTestCase {
@@ -46,9 +47,9 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
         let source = try await store.scoreInputSource(
             deviceId: "my-whoop-noop", day: daily.day, key: "recovery"
         )
-        let recoveryBuild = try await store.scoreComputationProvenance(
+        let recoveryBuild = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: daily.day, key: "recovery")
-        let restBuild = try await store.scoreComputationProvenance(
+        let restBuild = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: daily.day, key: "sleep_performance")
         XCTAssertEqual(storedDaily.first?.recovery, 71)
         XCTAssertEqual(source, "polar-1")
@@ -89,9 +90,9 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
         let strainSource = try await store.scoreInputSource(
             deviceId: "my-whoop-noop", day: day, key: "strain"
         )
-        let recoveryBuild = try await store.scoreComputationProvenance(
+        let recoveryBuild = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: day, key: "recovery")
-        let strainBuild = try await store.scoreComputationProvenance(
+        let strainBuild = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: day, key: "strain")
         XCTAssertEqual(recoverySource, "oura-api")
         XCTAssertNil(strainSource)
@@ -123,7 +124,7 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
         )
         let storedDaily = try await store.dailyMetrics(deviceId: "my-whoop-noop", from: day, to: day)
         let source = try await store.scoreInputSource(deviceId: "my-whoop-noop", day: day, key: "recovery")
-        let build = try await store.scoreComputationProvenance(
+        let build = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: day, key: "recovery")
         XCTAssertEqual(storedDaily.first?.recovery, 71)   // window not wiped
         XCTAssertEqual(source, "polar-1")                 // provenance not wiped
@@ -155,7 +156,7 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
             deviceId: "my-whoop-noop", key: "vo2max_est", from: day, to: day)
         let estimator = try await store.scoreInputSource(
             deviceId: "my-whoop-noop", day: day, key: "vo2max_est")
-        let vo2Build = try await store.scoreComputationProvenance(
+        let vo2Build = try await store.computationRowForTest(
             deviceId: "my-whoop-noop", day: day, key: "vo2max_est")
         XCTAssertEqual(points.first?.value, 48)
         XCTAssertEqual(estimator, Vo2MaxEstimator.nes.rawValue)
@@ -204,5 +205,22 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
             strain: strain,
             exerciseCount: nil
         )
+    }
+}
+
+private extension WhoopStore {
+    /// Verify the persisted cells directly; tier 3 has no production reader yet.
+    func computationRowForTest(deviceId: String, day: String, key: String) throws
+        -> (computedBy: String, computedAt: Int64, scope: ScoreComputationScope)? {
+        try syncRead { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT computedBy, computedAt, scope
+                FROM scoreComputationProvenance
+                WHERE deviceId = ? AND day = ? AND key = ?
+                """, arguments: [deviceId, day, key]),
+                  let scope = ScoreComputationScope(rawValue: row["scope"] as String)
+            else { return nil }
+            return (computedBy: row["computedBy"], computedAt: row["computedAt"], scope: scope)
+        }
     }
 }
