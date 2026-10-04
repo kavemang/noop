@@ -834,21 +834,20 @@ struct TodayView: View {
 
     /// The ordered "What shaped it" Charge drivers for the displayed Charge ring, PLUS the confidence tier
     /// computed from the SAME folded HRV baseline. PURE derivation from the SAME `displayDay` (post-#814
-    /// union-read row) the ring already shows, plus the HRV/RHR/resp baselines folded from `repo.days`
-    /// (exactly the inputs `AnalyticsEngine` scored with), so a row can NEVER describe a term the ring's
-    /// number didn't use. This is NOT a second store read: it reads only data already resolved into
-    /// `repo.days`/`displayDay`. nil for a calibrating / cold-start night (no usable HRV baseline or no
-    /// value), so the sheet gates through to the calibration countdown instead.
+    /// union-read row) the ring already shows, plus the HRV/RHR/resp baselines `repo.chargeBaselines`
+    /// resolved with the engine's own rule (#2525), so a row can NEVER describe a term the ring's number
+    /// didn't use. This is NOT a second store read: it reads only data already resolved into
+    /// `repo.chargeBaselines`/`displayDay`. nil for a calibrating / cold-start night (no usable HRV baseline
+    /// or no value), so the sheet gates through to the calibration countdown instead.
     ///
     /// PERF: this replaces the two separate computed properties (`chargeDrivers` +
     /// `chargeBreakdownConfidence`) that EACH re-folded the full `repo.days` history per body evaluation of
-    /// the open sheet — four O(n) passes per eval, with the confidence's doc claiming it reused the drivers'
-    /// fold while actually recomputing it. One call folds each series exactly once (three passes), and the
-    /// sheet reads drivers + confidence out of a single sheet-local `let`.
+    /// the open sheet. The baselines are now resolved once per refresh, so a body evaluation folds nothing,
+    /// and the sheet reads drivers + confidence out of a single sheet-local `let`.
     private func chargeBreakdown() -> (drivers: [ChargeDriver], confidence: ScoreConfidence)? {
         guard let row = chargeBreakdownRow else { return nil }
-        return ChargeBreakdownWiring.breakdown(days: repo.days, row: row, sleepPerfPercent: restScore,
-                                               hrvBaselineEpoch: Baselines.hrvBaselineEpoch())
+        guard let baselines = repo.chargeBaselines else { return nil }
+        return ChargeBreakdownWiring.breakdown(baselines: baselines, row: row, sleepPerfPercent: restScore)
     }
 
     /// The night's relative skin-temp marker for the displayed row (A5), or nil. Surfaced verbatim from
@@ -1143,8 +1142,8 @@ struct TodayView: View {
 
     private func computeCalibration() -> Int? {
         guard selectedDayOffset == 0 else { return nil }
-        return RecoveryScorer.calibrationNights(nightlyHrv: repo.days.map(\.avgHrv),
-                                                dayKeys: repo.days.map(\.day),
+        return RecoveryScorer.calibrationNights(nightlyHrv: repo.chargeBaselines?.hrvHistory.values ?? [],
+                                                dayKeys: repo.chargeBaselines?.hrvHistory.dayKeys ?? [],
                                                 hasRecovery: repo.today?.recovery != nil)
     }
 
@@ -5033,8 +5032,14 @@ struct TodayView: View {
             // maximum is above it. See `ProfileStore.effortHRmax`.
             let maxHR = profile.effortHRmax
             let restHR = displayDay?.restingHr.map(Double.init) ?? StrainScorer.defaultRestingHR
-            liveStrainLocal = StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
-                                        method: PuffinExperiment.effortMethod, sex: profile.sex)
+            let method = PuffinExperiment.effortMethod
+            let sex = profile.sex
+            // The full-day fingerprint and score are pure; do not occupy the main actor
+            // while the Today cards are scrolling or responding to touch.
+            liveStrainLocal = await Task.detached(priority: .utility) {
+                StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
+                                    method: method, sex: sex)
+            }.value
         } else {
             liveStrainLocal = nil
         }
