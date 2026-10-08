@@ -17,7 +17,7 @@ class CoachCatalogueStaleTest {
 
     @Test
     fun `opening settings invokes the gated refresh rather than an unconditional pull`() {
-        var dir: File? = File(System.getProperty("user.dir"))
+        var dir: File? = File(requireNotNull(System.getProperty("user.dir")))
         var source: String? = null
         repeat(5) {
             val current = dir ?: return@repeat
