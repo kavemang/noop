@@ -3174,8 +3174,9 @@ final class IntelligenceEngine: ObservableObject {
     private func selectedNightRecoveryUpdates(store: WhoopStore, window: SleepRecalculationWindow,
                                               fresh: [DailyMetric], ownerByDay: [String: String]) async throws -> [SleepRecoveryUpdate] {
         let wallNow = Date()
-        let today = AnalyticsEngine.dayString(Int(wallNow.timeIntervalSince1970), offsetSec: TimeZone.current.secondsFromGMT(for: wallNow))
-        let from = AnalyticsEngine.dayString(AnalyticsEngine.dayStartUtcSeconds(today) - 20 * 86_400)
+        let localDays = LocalDayWindows(timeZone: .current)
+        let today = localDays.dayKey(for: wallNow)
+        let from = localDays.localDate(of: wallNow).adding(days: -20).key
         guard window.day >= from else { return [] }
         let to = today
         let imported = try await store.dailyMetrics(deviceId: deviceId, from: from, to: to)
