@@ -2258,6 +2258,7 @@ struct SleepView: View {
         }
     }
 
+    @ViewBuilder
     private var emptyState: some View {
         SleepFreshnessNote(latestWakeTs: nil)
         if repo.loaded {
