@@ -495,12 +495,14 @@ interface WhoopDao : DeviceRegistryDao {
     ) {
         if (rows.isNotEmpty()) upsertMetricSeries(rows)
         if (provenance.isNotEmpty()) upsertScoreInputProvenance(provenance)
-        val computationRows = scoreComputationProvenanceRows(
-            deviceId = rows.firstOrNull()?.deviceId ?: return,
-            cells = rows.map { it.day to it.key },
-            stamp = computation,
-            scope = ScoreComputationScope.METRIC_SERIES,
-        )
+        val computationRows = rows.groupBy { it.deviceId }.flatMap { (deviceId, points) ->
+            scoreComputationProvenanceRows(
+                deviceId = deviceId,
+                cells = points.map { it.day to it.key },
+                stamp = computation,
+                scope = ScoreComputationScope.METRIC_SERIES,
+            )
+        }
         if (computationRows.isNotEmpty()) upsertScoreComputationProvenance(computationRows)
     }
 
@@ -551,7 +553,8 @@ interface WhoopDao : DeviceRegistryDao {
         if (provenance.isNotEmpty()) upsertScoreInputProvenance(provenance)
         val computationRows = scoreComputationProvenanceRows(
             deviceId = deviceId,
-            cells = provenance.map { it.day to it.key } + metricPoints.map { it.day to it.key },
+            cells = provenance.map { it.day to it.key } +
+                metricPoints.filter { it.deviceId == deviceId }.map { it.day to it.key },
             stamp = computation,
             scope = ScoreComputationScope.SCORE_WINDOW,
         )

@@ -188,6 +188,12 @@ final class ScoreInputProvenanceStoreTests: XCTestCase {
         let old = try await store.metricSeries(deviceId: "old-noop", key: "day_cycle_onset_ts",
                                                from: day, to: day)
         XCTAssertEqual(old.map(\.value), [2])
+        let activeStamp = try await store.computationRowForTest(
+            deviceId: "active-noop", day: day, key: "day_cycle_onset_ts")
+        let oldStamp = try await store.computationRowForTest(
+            deviceId: "old-noop", day: day, key: "day_cycle_onset_ts")
+        XCTAssertNil(activeStamp)
+        XCTAssertNil(oldStamp) // Additional owners are outside this window's stamp scope.
     }
 
     private func makeDaily(day: String, recovery: Double?, strain: Double?) -> DailyMetric {
