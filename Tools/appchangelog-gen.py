@@ -24,14 +24,14 @@ A per-version notes file docs/releases/v<VER>.md may carry a YAML front-matter b
 
 Running `Tools/appchangelog-gen.py docs/releases/v8.2.2.md` prepends the generated Release entry to
 `releases` in AppChangelog.kt AND AppChangelog.swift and bumps CURRENT_VERSION/currentVersion to that
-version. Idempotent: if the version is already the newest entry it only re-checks the constant. The
-version comes from the filename (v8.2.2.md -> 8.2.2).
+version. Idempotent: re-running refreshes the newest headline and constant without duplicating a release.
+The version comes from the filename (v8.2.2.md -> 8.2.2).
 
 TITLE LOCALIZATION (#878, #2037). Compose has no auto-extraction, so a raw Kotlin
 `title = "..."` is a hardcoded literal. SwiftUI also cannot extract the old
-`Text(release.title)` call because `title` is a runtime String. Each Swift entry
-therefore uses `String(localized:)` with a literal title, and the Apple catalog
-receives the same `title_locales` translations as Android.
+`Text(release.title)` call because `title` is a runtime String. The newest Swift title uses
+`String(localized:)` with a literal key; historical titles stay English to bound the work in the
+large array expression. The Apple catalog receives the supplied `title_locales` translations.
 
 This script therefore emits `title = uiString(R.string.<key>)` for Kotlin and writes the string
 itself, using the repo's key scheme: `l10n_app_changelog_<first 6 alnum words, lowercased>_<sha1 of
@@ -204,7 +204,7 @@ def sw_block(ver, wn):
     )
 
 
-def apply(path, anchor, block, ver, const_re, const_new, title_line=None):
+def apply(path, anchor, block, ver, const_re, const_new, title_line=None, newest_apple_title_only=False):
     """Insert `block` at `anchor`, or refresh an existing entry for `ver`, then bump the constant.
 
     `title_line` is the platform's rendered title assignment. It is re-applied to an entry that already exists, because re-running after editing
@@ -232,6 +232,19 @@ def apply(path, anchor, block, ver, const_re, const_new, title_line=None):
             print(f"  {path.name}: v{ver} already the newest entry — leaving entries, refreshing constant")
     else:
         text = text[:idx] + block + text[idx:]
+    if newest_apple_title_only:
+        # Keep one localized title in the large Swift literal. Historical titles remain English;
+        # adding a release must not accumulate localization calls in every previous entry.
+        tail = text[idx:]
+        first = re.search(r"^[ \t]*title:", tail, re.M)
+        localized = re.compile(r'(^[ \t]*title: )String\(localized: ("(?:[^"\\]|\\.)*")\)(,?)$', re.M)
+
+        def historical_literal(match):
+            if first is not None and match.start() == first.start():
+                return match.group(0)
+            return "".join(match.groups())
+
+        text = text[:idx] + localized.sub(historical_literal, tail)
     text, n = re.subn(const_re, const_new, text, count=1)
     if n != 1:
         sys.exit(f"appchangelog-gen: could not bump the version constant in {path.name}")
@@ -254,7 +267,7 @@ def main():
           title_line=f'title = uiString(R.string.{title_key(wn["title"])}),')
     apply(SW, "static let releases: [Release] = [\n", sw_block(ver, wn), ver,
           r'(static let currentVersion = ")[^"]*(")', rf'\g<1>{ver}\g<2>',
-          title_line=f'title: String(localized: "{esc_sw(wn["title"])}"),')
+          title_line=f'title: String(localized: "{esc_sw(wn["title"])}"),', newest_apple_title_only=True)
     print("appchangelog-gen: done. Review the diff, then compile.")
 
 

@@ -235,5 +235,27 @@ class AndroidTitleRefreshTests(unittest.TestCase):
             self.assertIn("English title", (root / "values/strings.xml").read_text())
 
 
+class AppleNewestTitleTests(unittest.TestCase):
+    def test_insertion_and_rerun_leave_one_localized_title(self):
+        import tempfile
+        anchor = "static let releases: [Release] = [\n"
+        wn = {"title": 'New "headline"', "date": "October 2026", "items": ["An item"]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "Changelog.swift"
+            path.write_text('static let currentVersion = "1.0"\n' + anchor +
+                            acg.sw_block("1.0", {**wn, "title": "Old headline"}) + "]\n")
+            for _ in range(2):
+                acg.apply(path, anchor, acg.sw_block("2.0", wn), "2.0",
+                          r'(static let currentVersion = ")[^"]*(")', r'\g<1>2.0\g<2>',
+                          title_line=r'title: String(localized: "New \"headline\""),',
+                          newest_apple_title_only=True)
+                text = path.read_text()
+                self.assertEqual(1, text.count('title: String(localized:'))
+                self.assertIn(r'title: String(localized: "New \"headline\""),', text)
+                self.assertIn('title: "Old headline",', text)
+                self.assertIn('"An item",', text)
+                self.assertEqual(1, text.count('version: "2.0"'))
+
+
 if __name__ == "__main__":
     unittest.main()
