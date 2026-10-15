@@ -98,14 +98,27 @@ internal const val DAY_STREAM_FINGERPRINT_SQL =
 internal const val SCORABLE_OURA_CHANNELS = "(1, 3, 4)"
 
 /** Shared production SQL used by Room and the SQLite repository contract tests. The SCORING read: see
- *  [WhoopDao.rrIntervals] for the one-Oura-channel selection. Twin of Swift `WhoopStore.rrIntervals`. */
+ *  [WhoopDao.rrIntervals] for the one-Oura-channel selection. Twin of Swift `WhoopStore.rrIntervals`.
+ *
+ *  The Oura channel is chosen per UTC HOUR of the requested window, not once for the whole window: 0x60
+ *  is banked only overnight and 0x80 carries every daytime beat, so one whole-window count let a night's
+ *  0x60 outvote the day's 0x80 on any read that crossed wake and dropped every daytime beat. An hour where
+ *  both fire keeps the fuller one; an hour where only one fires keeps it. A window inside one hour reads
+ *  exactly as the whole-window rule did. LEFT JOIN so NULL and non-Oura rows pass whether or not their hour
+ *  has a choice; the outer table stays unaliased so its column names read as in the other queries.
+ *  Deliberately NOT `AS MATERIALIZED`, unlike the Swift twin, for the minSdk reason on
+ *  [WHOOP4_RR_INTERVALS_SQL]. */
 internal const val RR_INTERVALS_SQL =
-    "SELECT * FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
+    "WITH ouraHourChoice AS (" +
+    "SELECT ts / 3600 AS hour, SUM(srcChannel = 1) > SUM(srcChannel <> 1) AS keepGreen " +
+    "FROM rrInterval WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
+    "AND srcChannel IN " + SCORABLE_OURA_CHANNELS + " " +
+    "AND (tsSuspect IS NULL OR tsSuspect <> 1) GROUP BY ts / 3600) " +
+    "SELECT rrInterval.* FROM rrInterval LEFT JOIN ouraHourChoice h ON h.hour = rrInterval.ts / 3600 " +
+    "WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to " +
     "AND (srcChannel IS NULL OR srcChannel <> 2) " +
-    "AND (srcChannel IS NULL OR srcChannel NOT IN " + SCORABLE_OURA_CHANNELS + " OR (srcChannel = 1) = (" +
-    "SELECT SUM(srcChannel = 1) > SUM(srcChannel <> 1) FROM rrInterval " +
-    "WHERE deviceId = :deviceId AND ts >= :from AND ts <= :to AND srcChannel IN " + SCORABLE_OURA_CHANNELS + " " +
-    "AND (tsSuspect IS NULL OR tsSuspect <> 1))) " +
+    "AND (srcChannel IS NULL OR srcChannel NOT IN " + SCORABLE_OURA_CHANNELS + " " +
+    "OR (srcChannel = 1) = h.keepGreen) " +
     "AND (tsSuspect IS NULL OR tsSuspect <> 1) " +
     "ORDER BY ts ASC, ord ASC, rrMs ASC, seq ASC LIMIT :limit"
 
@@ -1101,18 +1114,52 @@ interface WhoopDao : DeviceRegistryDao {
      * under [LAB_BOOK_SOURCE_ID]. Idempotent by natural key; LATEST-numeric-per-day wins in the
      * projection (qualitative valueText-only readings never project a REAL cell). Atomic — the
      * marker write and the projection can't diverge. Byte-identical to Swift
-     * WhoopStore.upsertLabMarkers.
+     * WhoopStore.upsertLabMarkers. Import-time legacy aliases may move a device's history only into
+     * an absent target; that move, incoming writes and both projections share this transaction.
      */
+    // Swift twin: `WhoopStore.upsertLabMarkers`.
     @Transaction
-    suspend fun upsertLabMarkers(rows: List<LabMarkerRow>) {
+    suspend fun upsertLabMarkers(rows: List<LabMarkerRow>, legacyKeys: Map<String, String> = emptyMap()) {
         if (rows.isEmpty()) return
-        insertLabMarkersRaw(rows)
+        val cells = rows.map { Triple(it.deviceId, it.markerKey, it.day) }.toMutableSet()
+        for ((deviceId, imported) in if (legacyKeys.isEmpty()) emptyMap() else rows.groupBy { it.deviceId }) {
+            val currentKeys = imported.map { it.markerKey }.toSet()
+            val presentKeys = markerKeysPresent(deviceId).toMutableSet()
+            for ((old, new) in legacyKeys.toSortedMap()) {
+                if (old == new || !old.startsWith("custom_") || old.length <= 7 ||
+                    !new.startsWith("custom_") || new.length <= 7 ||
+                    old in currentKeys || new !in currentKeys || old !in presentKeys || new in presentKeys) continue
+                val days = labMarkersByKey(deviceId, old).map { it.day }.toSet()
+                if (rekeyLegacyLabMarkers(deviceId, old, new) > 0) {
+                    presentKeys.remove(old)
+                    presentKeys.add(new)
+                    for (day in days) {
+                        cells += Triple(deviceId, old, day)
+                        cells += Triple(deviceId, new, day)
+                    }
+                }
+            }
+        }
+        // Swift's natural-key upsert retains the old stable id on an overlapping reimport.
+        // Preserve it for these repair imports too; REPLACE alone would mint a different id.
+        val importedRows = if (legacyKeys.isEmpty()) rows else {
+            val ids = rows.map { it.deviceId to it.markerKey }.distinct().flatMap { (deviceId, key) ->
+                labMarkersByKey(deviceId, key)
+            }.associateBy { Triple(it.deviceId, it.markerKey, it.takenAt to it.source) }
+            rows.map { row ->
+                ids[Triple(row.deviceId, row.markerKey, row.takenAt to row.source)]?.let { row.copy(id = it.id) } ?: row
+            }
+        }
+        insertLabMarkersRaw(importedRows)
         // Distinct touched cells, in a deterministic order.
-        val cells = rows.map { Triple(it.deviceId, it.markerKey, it.day) }.toSet()
         for ((deviceId, markerKey, day) in cells) {
             reprojectCell(deviceId, markerKey, day)
         }
     }
+
+    // Swift twin: `WhoopStore.rekeyLegacyLabMarkers`.
+    @Query("UPDATE labMarker SET markerKey = :to WHERE deviceId = :deviceId AND markerKey = :from")
+    suspend fun rekeyLegacyLabMarkers(deviceId: String, from: String, to: String): Int
 
     /**
      * Delete one reading by id; if it was the last numeric reading for its (markerKey, day) cell the
