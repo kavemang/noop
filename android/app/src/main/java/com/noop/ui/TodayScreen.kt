@@ -1,5 +1,6 @@
 package com.noop.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -156,6 +157,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.noop.R
 import com.noop.ai.AiKeyStore
 import com.noop.analytics.Baselines
+import com.noop.analytics.ChargeBaselines
 import com.noop.analytics.BatteryEstimator
 import com.noop.analytics.ChargeDriver
 import com.noop.analytics.ChargeDriverLabel
@@ -333,6 +335,9 @@ fun TodayScreen(
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
     val days by viewModel.recentDays.collectAsStateWithLifecycle()
+    // #2525: the Charge baselines the engine's rule resolves, the one source for every Charge readout below
+    // the headline (calibration count, "What shaped it", confidence tier).
+    val chargeBaselines by viewModel.chargeBaselines.collectAsStateWithLifecycle()
     val activeDayCycle by viewModel.activeDayCycle.collectAsStateWithLifecycle()
     val spo2CandidateByDay by viewModel.spo2CandidateByDay.collectAsStateWithLifecycle()
     // #2208: `connected` alone never said WHOSE charge liveSnap.batteryPct is. It goes true the moment any
@@ -395,6 +400,8 @@ fun TodayScreen(
         delay(4_500)
         scanHint = null
     }
+    // One composition snapshot for both status chips; neither child owns a clock or timer.
+    val statusNowSec = System.currentTimeMillis() / 1000L
     val liveSnap by remember {
         derivedStateOf {
             val s = live
@@ -866,11 +873,14 @@ fun TodayScreen(
 
     // The newest Apple Health / Health Connect body weight, loaded off the main thread. Null until the
     // load runs or when neither source carries a weight, the Weight tile then falls back to the profile.
+    // With "Use weight from Health Connect" ON it reads Health Connect only, the source the profile holds.
     var weightKg by remember { mutableStateOf<Double?>(null) }
-    LaunchedEffect(days) {
+    val weightFromHealthConnect = ProfileStore.from(context).useHealthConnectWeight
+    LaunchedEffect(days, weightFromHealthConnect) {
         weightKg = latestWeightKg(
             viewModel.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31"),
             viewModel.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31"),
+            healthConnectOnly = weightFromHealthConnect,
         )
     }
 
@@ -1065,7 +1075,10 @@ fun TodayScreen(
         // epoch-aware history the recovery engine folds — otherwise a post-recalibration user's pre-epoch
         // nights inflate the count past the seed gate and the score side wrongly reads NeedsStrap (Bug B).
         val hrvEpoch = NoopPrefs.of(context).getLong(Baselines.hrvBaselineEpochKey, 0L).toDouble()
-        recoveryCalibrationNights(days, displayMetric?.recovery != null, hrvEpoch)
+        recoveryCalibrationNights(
+            chargeBaselines?.hrvHistory?.values.orEmpty(), chargeBaselines?.hrvHistory?.dayKeys.orEmpty(),
+            displayMetric?.recovery != null, hrvEpoch,
+        )
     } else {
         null
     }
@@ -1408,6 +1421,7 @@ fun TodayScreen(
             LiquidTodayHeader(
                 dayTitle = dayTitle,
                 humanDate = humanDate,
+                nowSec = statusNowSec,
                 selectedDay = selectedDay,
                 battery = HeaderBatteryDisplay.resolve(
                     activeIsWhoop = activeIsWhoop, connected = liveSnap.connected,
@@ -1501,6 +1515,7 @@ fun TodayScreen(
             item {
                 RecordingStatusChip(
                     live = liveSnap,
+                    nowSec = statusNowSec,
                     onConnect = requestScan,
                 )
             }
@@ -1510,6 +1525,15 @@ fun TodayScreen(
         // ActiveWorkoutIndicator). A tap routes to Live and re-opens the in-exercise overlay. Gated purely on
         // `activeWorkout`, so it auto-appears/clears with no extra lifecycle wiring. Its per-second clock
         // ticks inside the card's own LaunchedEffect, never recomposing the Today body.
+        //
+        // STARTING a workout is deliberately not offered here, and that is the whole of #2467's first part
+        // being held back until its other four exist. #2467 asked for Today's Start to come WITH the merge
+        // of recording and heart-rate coaching into one session: one Start/Pause/End pair, one screen, one
+        // saved summary. Only the button was built, so Today ended up carrying both of the entry points the
+        // report opened about, "Start session" for coaching and "Start workout" for recording, which is more
+        // of the confusion it described rather than less. It also drew as a full-width primary slab above the
+        // scores, because the Start-beside-Add row it belongs to collapses to a single weighted child when
+        // Today passes no Add. Starting stays on Workouts, the centre FAB and Live meanwhile.
         activeWorkout?.let { w ->
             item {
                 WorkoutInProgressCard(workout = w, onReturn = onOpenActiveWorkout)
@@ -1621,7 +1645,11 @@ fun TodayScreen(
             }
         }
 
-        if (alert != null) item { IllnessBanner(alert!!) }
+        // The alert belongs to the newest banked night. A past-day view or a day
+        // rollover without a new row must not keep showing yesterday's warning.
+        if (selectedDayOffset == 0 && alert != null && today != null &&
+            days.lastOrNull()?.day == resolveTodayRow(days, todayDate.toString(), LocalDate.now().toString())?.day
+        ) item { IllnessBanner(alert!!) }
 
         // #486: the "Arrange" affordance moved UP into the header/wordmark cluster (see above) so it no
         // longer sits alone in its own full-width band here. It stays pinned; only its position changed.
@@ -2010,6 +2038,7 @@ fun TodayScreen(
         ) {
             ChargeBreakdownSheet(
                 days = days,
+                chargeBaselines = chargeBaselines,
                 displayDay = displayMetric,
                 carriedDay = lastScoredRecoveryDay,
                 showReadiness = selectedDayOffset == 0,
@@ -2545,6 +2574,7 @@ private val HeaderClusterControl = 36.dp
 
 @Composable
 private fun LiquidTodayHeader(
+    nowSec: Long,
     dayTitle: String,
     humanDate: String,
     selectedDay: LocalDate,
@@ -2657,6 +2687,7 @@ private fun LiquidTodayHeader(
             // so the absence of active syncing reads as caught-up (the full SyncingHistoryNote is gated on
             // recovery == null). Twin of iOS SyncStatusChip.
             SyncStatusChip(
+                nowSec = nowSec,
                 backfilling = backfilling, chunks = syncChunksThisSession,
                 lastSyncAt = lastSyncAt, historySyncExperimental = historySyncExperimental,
                 pagesBehind = pagesBehindAtConnect,
@@ -2706,6 +2737,7 @@ private fun LiquidTodayHeader(
  *  building-scores note owns that). Twin of iOS SyncStatusChip. DRAFT (#245): final styling/wording TBD. */
 @Composable
 private fun SyncStatusChip(
+    nowSec: Long,
     backfilling: Boolean,
     chunks: Int,
     lastSyncAt: Long?,
@@ -2719,16 +2751,13 @@ private fun SyncStatusChip(
     scanning: Boolean = false,
     onRescan: (() -> Unit)? = null,
 ) {
-    // The clock and the translated "now" word are resolved HERE, in the composable that already depends
-    // on both, and handed down — so `SyncChipState.resolve` stays a genuinely pure decision that a plain
-    // JVM unit test can call with no attached Application. Reading the clock at composition time (rather
-    // than snapshotting it) is unchanged behaviour: `shortSyncAgo` did exactly this on every recomposition.
+    // The screen supplies the same clock snapshot to both status chips.
     val state = SyncChipState.resolve(
         backfilling = backfilling,
         chunks = chunks,
         lastSyncAtSec = lastSyncAt,
         historySyncExperimental = historySyncExperimental,
-        nowSec = System.currentTimeMillis() / 1000L,
+        nowSec = nowSec,
         pagesBehind = pagesBehind,
     )
     // Offered only when there is an action to run and no scan already running, the same rule the
@@ -4750,6 +4779,16 @@ private fun intStringGrouped(v: Double): String {
 
 // MARK: - Shared Shown / Hidden editor rows
 
+@Composable
+private fun VisibilityItemLabel(title: String, subtitle: String?, color: Color, modifier: Modifier) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Metrics.space2)) {
+        Text(title, style = NoopType.body, color = color)
+        if (subtitle != null) {
+            Text(subtitle, style = NoopType.caption, color = Palette.textSecondary)
+        }
+    }
+}
+
 /**
  * The common editor body used by Today sections, Key Metrics and Your Cards. Items are never deleted:
  * remove moves one from Shown to Hidden, add restores it at the end of Shown, and the arrow controls use
@@ -4770,6 +4809,7 @@ internal fun <T> EditableVisibilityRows(
     // a user browses by origin. null (Today sections, Key Metrics, Your Cards) keeps the flat list. The
     // Shown list stays flat — it is the user's own cross-origin order. Twin of the Swift EditableLayoutList.
     hiddenGroup: ((T) -> String)? = null,
+    itemSubtitle: @Composable (T) -> String? = { null },
 ) {
     val minShown = if (allowEmpty) 0 else 1
     Column(
@@ -4784,7 +4824,7 @@ internal fun <T> EditableVisibilityRows(
                 modifier = Modifier.fillMaxWidth().padding(vertical = Metrics.space6),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(title, style = NoopType.body, color = Palette.textPrimary, modifier = Modifier.weight(1f))
+                VisibilityItemLabel(title, itemSubtitle(item), Palette.textPrimary, Modifier.weight(1f))
                 IconButton(
                     onClick = {
                         if (index > 0) shown.add(index - 1, shown.removeAt(index))
@@ -4861,7 +4901,7 @@ internal fun <T> EditableVisibilityRows(
                         modifier = Modifier.fillMaxWidth().padding(vertical = Metrics.space6),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(title, style = NoopType.body, color = Palette.textTertiary, modifier = Modifier.weight(1f))
+                        VisibilityItemLabel(title, itemSubtitle(item), Palette.textTertiary, Modifier.weight(1f))
                         IconButton(
                             onClick = { hidden.remove(item); shown.add(item) },
                             modifier = Modifier.size(Metrics.iconButton),
@@ -4886,7 +4926,7 @@ internal fun <T> EditableVisibilityRows(
                     modifier = Modifier.fillMaxWidth().padding(vertical = Metrics.space6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(title, style = NoopType.body, color = Palette.textTertiary, modifier = Modifier.weight(1f))
+                    VisibilityItemLabel(title, itemSubtitle(item), Palette.textTertiary, Modifier.weight(1f))
                     IconButton(
                         onClick = { shown.add(hidden.removeAt(index)) },
                         modifier = Modifier.size(Metrics.iconButton),
@@ -5268,6 +5308,11 @@ private fun TodayLayoutEditorDialog(
                     shown = shown,
                     hidden = hidden,
                     itemTitle = { uiString(it.titleRes) },
+                    itemSubtitle = {
+                        if (it == TodaySection.LIVE_SESSION) {
+                            stringResource(R.string.today_customize_live_session_availability)
+                        } else null
+                    },
                 )
 
                 // #today-hosted-cards: hand-off to the editor that chooses WHICH Trends/Sleep cards the
@@ -5317,6 +5362,7 @@ private fun TodayLayoutEditorDialog(
 @Composable
 internal fun ChargeBreakdownSheet(
     days: List<DailyMetric>,
+    chargeBaselines: ChargeBaselines.Resolved?,
     displayDay: DailyMetric?,
     carriedDay: DailyMetric?,
     showReadiness: Boolean,
@@ -5360,7 +5406,7 @@ internal fun ChargeBreakdownSheet(
             ) {
                 // The breakdown self-gates: a calibrating night (empty drivers) renders nothing here, the
                 // Contributors + Readiness below still give an honest read, never a blank sheet.
-                RecoveryDriversSection(days = days, displayDay = displayDay, carriedDay = carriedDay)
+                RecoveryDriversSection(chargeBaselines = chargeBaselines, displayDay = displayDay, carriedDay = carriedDay)
                 RecoveryContributorsSection(day = displayDay, carriedDay = carriedDay)
                 // S4: the SEPARATE Readiness block now lives here behind the Charge-ring tap (today-only,
                 // matching the old inline gate). A one-word read (Push / Maintain / Rest) stays on the hero.
@@ -5473,21 +5519,18 @@ internal fun ChargeBreakdownSheet(
 
 @Composable
 private fun RecoveryDriversSection(
-    days: List<DailyMetric>,
+    chargeBaselines: ChargeBaselines.Resolved?,
     displayDay: DailyMetric?,
     carriedDay: DailyMetric? = null,
 ) {
-    // #2315: the same recalibration epoch the engine folds with. Read here rather than threaded from the
-    // caller because this section is the only consumer, and the pref read is one getLong behind remember.
-    val context = LocalContext.current
-    val hrvEpoch = remember { NoopPrefs.of(context).getLong(Baselines.hrvBaselineEpochKey, 0L).toDouble() }
     // Read the row the Charge ring itself reads: today's own when scored, else the carried last-scored
-    // day (#543) so the breakdown matches the carried ring instead of vanishing at the rollover.
+    // day (#543) so the breakdown matches the carried ring instead of vanishing at the rollover. The
+    // baselines already carry both recalibration epochs (#2315), applied where they were resolved (#2525).
     val readDay = carriedDay ?: displayDay
-    val drivers = remember(days, readDay, hrvEpoch) { recoveryChargeDrivers(days, readDay, hrvEpoch) }
+    val drivers = remember(chargeBaselines, readDay) { recoveryChargeDrivers(chargeBaselines, readDay) }
     if (drivers.isEmpty()) return
 
-    val tier = remember(days, readDay, hrvEpoch) { chargeConfidenceTier(days, readDay, hrvEpoch) }
+    val tier = remember(chargeBaselines, readDay) { chargeConfidenceTier(chargeBaselines, readDay) }
     val overline = carriedDay?.let { uiString(R.string.today_charge_carried, carriedCaption(it.day).localized()) }
         ?: uiString(R.string.trends_charge)
 
@@ -5851,33 +5894,20 @@ private fun ChargeLegacyRrGapNote() {
 /** A live-data status beneath Today's header. The existing recording model keeps a connected but
  * silent strap distinct from one that is actually sending heart-rate samples. */
 @Composable
-private fun RecordingStatusChip(live: TodayLiveSnapshot, onConnect: () -> Unit) {
-    var nowSec by remember(live.lastSyncAt) { mutableStateOf(System.currentTimeMillis() / 1000L) }
-    LaunchedEffect(live.lastSyncAt) {
-        if (live.lastSyncAt != null) {
-            while (true) {
-                delay(60_000)
-                nowSec = System.currentTimeMillis() / 1000L
-            }
-        }
-    }
-    val state = if (live.connected && live.historySyncExperimental) {
-        RecordingState.HistoryExperimental
-    } else {
-        recordingStateFor(
-            connected = live.connected,
-            liveHeartRate = if (live.hrStreaming) 1 else null,
-            lastSyncAtSec = live.lastSyncAt,
-            nowSec = nowSec,
-            sustainedEmptyOffload = live.sustainedEmptyOffload,
-        )
-    }
-    val title = when (state) {
-        is RecordingState.LastSynced -> uiString(state.titleRes, state.minutesAgo)
-        else -> uiString(state.titleRes)
-    }
+private fun RecordingStatusChip(live: TodayLiveSnapshot, nowSec: Long, onConnect: () -> Unit) {
+    // The header owns last-sync age and experimental history. This row reports live data only;
+    // omit the historical fallback instead of restating it beside the sync chip.
+    val state = recordingStateFor(
+        connected = live.connected,
+        liveHeartRate = if (live.hrStreaming) 1 else null,
+        lastSyncAtSec = live.lastSyncAt,
+        nowSec = nowSec,
+        sustainedEmptyOffload = live.sustainedEmptyOffload,
+    )
+    if (state is RecordingState.LastSynced) return
+    val title = uiString(state.titleRes)
     val detail = uiString(state.detailRes)
-    val canConnect = state is RecordingState.NotRecording || state is RecordingState.LastSynced
+    val canConnect = state is RecordingState.NotRecording
     Row(
         modifier = Modifier.fillMaxWidth().then(
             if (canConnect) Modifier.clickable(onClick = onConnect) else Modifier
@@ -6481,6 +6511,35 @@ private fun HrWindowPills(selection: HrWindow, onSelect: (HrWindow) -> Unit) {
     )
 }
 
+/**
+ * Which line the Today HR card shows when it cannot draw a curve, chosen from what the read returned
+ * and from nothing else (#863).
+ *
+ * The card's gate is that the active-strap-plus-imports union came back with under two 5-minute
+ * buckets. It does NOT know whether a strap is calibrating, whether it has offloaded, or whether rows
+ * sit under a source the union cannot reach, which is why no branch here names a cause: the old single
+ * line opened "Calibrating" and asserted "no heart rate banked yet today", and a card naming an
+ * unchecked cause sends a reader looking in the wrong place.
+ *
+ * [dayBucketCount] is the DAY's count, never the windowed subset, because every branch below speaks
+ * about the day: a narrow rolling window that happens to exclude the one stored block must not make the
+ * card claim the day holds nothing. The window branch is the one exception and says so explicitly, and
+ * it only applies while the day itself has a drawable curve to go back to.
+ *
+ * Pure so the selection is pinned without a Compose host. Swift twin: `TodayView.hrEmptyTitle`.
+ */
+@StringRes
+internal fun hrEmptyMessageRes(
+    isToday: Boolean,
+    windowIsWholeDay: Boolean,
+    dayBucketCount: Int,
+): Int = when {
+    !isToday -> R.string.today_hr_empty_selected_day
+    !windowIsWholeDay && dayBucketCount >= 2 -> R.string.today_hr_empty_window
+    dayBucketCount == 1 -> R.string.today_hr_one_block
+    else -> R.string.today_hr_none_today
+}
+
 /** The width of the Today HR card's buckets.
  *
  *  ONE literal, read by the load below and by the gap test in [OverviewHRChart]. They have to agree:
@@ -6609,6 +6668,14 @@ private fun HeartRateTrendCard(
     // #985: the check reads the WINDOWED subset, and the pills stay visible in the empty state, so a
     // too-narrow rolling window (say 1h with no recent offload) is never a dead end — the user widens it
     // or steps back to Today, and the message says which window came up empty.
+    //
+    // The copy states what the READ returned and nothing else. It used to open "Calibrating" and assert
+    // "no heart rate banked yet today", neither of which is checked here: the gate is simply that the
+    // active-strap-plus-imports union came back with under two buckets. Nothing on this branch knows
+    // whether a strap is calibrating, whether it has offloaded, or whether rows are banked somewhere this
+    // union cannot see, and a card that names a cause it has not established sends a reader looking in the
+    // wrong place. One stored block is also not "no heart rate", so it gets its own line rather than being
+    // rounded down to zero.
     if (winBuckets.size < 2) {
         SectionHeader(uiString(R.string.today_section_heart_rate), overline = selectedLabel)
         NoopCard {
@@ -6617,14 +6684,17 @@ private fun HeartRateTrendCard(
                 if (selectedDay == today) {
                     HrWindowPills(hrWindow) { hrWindowOrdinal = it.ordinal }
                 }
+                val emptyRes = hrEmptyMessageRes(
+                    isToday = selectedDay == today,
+                    windowIsWholeDay = hrWindow == HrWindow.TODAY,
+                    dayBucketCount = buckets.size,
+                )
                 Text(
-                    when {
-                        selectedDay != today ->
-                            uiString(R.string.today_hr_empty_selected_day)
-                        hrWindow != HrWindow.TODAY && buckets.size >= 2 ->
-                            uiString(R.string.today_hr_empty_window, uiString(hrWindow.labelRes))
-                        else ->
-                            uiString(R.string.today_hr_calibrating)
+                    // Only the window line takes an argument; the rest are plain.
+                    if (emptyRes == R.string.today_hr_empty_window) {
+                        uiString(emptyRes, uiString(hrWindow.labelRes))
+                    } else {
+                        uiString(emptyRes)
                     },
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
@@ -8054,10 +8124,9 @@ private fun KeyMetricsEditorDialog(
     onDismiss: () -> Unit,
     onSave: (List<KeyMetric>, Boolean, Int) -> Unit,
 ) {
-    val context = LocalContext.current
     val titles = KeyMetric.entries.associateWith { uiString(it.titleRes) }
-    // Detailed tiles: taller/squarer with a trend graph under the fill bar (display-only), over the
-    // chosen trailing window (1 week / 2 weeks / 1 month).
+    // Today shows only the selected day's values; Trends adds the graph over the chosen window.
+    // Keep the existing detailed preference so saved layouts retain their behavior.
     var detailed by remember { mutableStateOf(initialDetailed) }
     var windowDays by remember { mutableStateOf(initialWindowDays) }
     val shown = remember { mutableStateListOf<KeyMetric>().apply { addAll(initial) } }
@@ -8085,32 +8154,14 @@ private fun KeyMetricsEditorDialog(
                     )
                 }
 
-                // Detailed tiles: the tile-style option (compact ktile vs squarer tile + 14-day graph).
-                Row(
+                SegmentedPillControl(
+                    items = listOf(false, true),
+                    selection = detailed,
+                    label = { if (it) uiString(R.string.nav_trends) else uiString(R.string.nav_today) },
+                    onSelect = { detailed = it },
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(uiString(R.string.l10n_today_screen_detailed_tiles_0801721b), style = NoopType.body, color = Palette.textPrimary)
-                        Text(
-                            uiString(R.string.l10n_today_screen_squarer_tiles_with_a_trend_graph_3c297dec),
-                            style = NoopType.caption,
-                            color = Palette.textSecondary,
-                        )
-                    }
-                    Switch(
-                        checked = detailed,
-                        onCheckedChange = { detailed = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Palette.surfaceBase,
-                            checkedTrackColor = Palette.accent,
-                            uncheckedThumbColor = Palette.textSecondary,
-                            uncheckedTrackColor = Palette.surfaceInset,
-                            uncheckedBorderColor = Palette.hairline,
-                        ),
-                        modifier = Modifier.semantics { contentDescription = uiString(R.string.l10n_today_screen_detailed_tiles_0801721b) },
-                    )
-                }
+                    accessibilityLabel = uiString(R.string.l10n_today_screen_edit_key_metrics_f95e61a4),
+                )
                 // The detailed graphs' trailing window — 1 week / 2 weeks / 1 month (the NOOP signature
                 // segmented pill, same control the trend screens use). Only shown while Detailed is on.
                 if (detailed) {
@@ -8118,12 +8169,13 @@ private fun KeyMetricsEditorDialog(
                         items = listOf(7, 14, 30),
                         selection = windowDays,
                         label = { when (it) {
-                            7 -> context.getString(R.string.today_range_1_week)
-                            14 -> context.getString(R.string.today_range_2_weeks)
-                            else -> context.getString(R.string.today_range_1_month)
+                            7 -> uiString(R.string.today_range_1_week)
+                            14 -> uiString(R.string.today_range_2_weeks)
+                            else -> uiString(R.string.today_range_1_month)
                         } },
                         onSelect = { windowDays = it },
                         modifier = Modifier.fillMaxWidth(),
+                        accessibilityLabel = uiString(R.string.nav_trends),
                     )
                 }
                 HorizontalDivider(color = Palette.hairline, thickness = 1.dp)
