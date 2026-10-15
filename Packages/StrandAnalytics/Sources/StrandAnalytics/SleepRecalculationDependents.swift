@@ -9,24 +9,24 @@ public enum SleepRecalculationDependents {
                                hrvEpoch: Double, recoveryEpoch: Double) -> [SleepRecoveryUpdate] {
         guard let selected = Baselines.isoEpochDay(selectedDay), let anchor = Baselines.isoEpochDay(anchorDay),
               anchor >= selected, anchor - selected < ChargeBaselines.windowDays else { return [] }
+        let resolved = ChargeBaselines.resolve(imported: imported, own: computed, anchorDay: anchorDay,
+                                              hrvEpoch: hrvEpoch, recoveryEpoch: recoveryEpoch)
+        let sourceDays = Set((imported + computed).filter { $0.day <= anchorDay }.map(\.day)).sorted()
+        let respEpoch = max(recoveryEpoch, Baselines.deviceEraEpoch(
+            sourceDays.map { (day: $0, sourceId: sourceByDay[$0] ?? importedSource) }))
+        let respBase = Baselines.foldHistory(resolved.respHistory.values, dayKeys: resolved.respHistory.dayKeys,
+                                             cfg: Baselines.respCfg, baselineEpoch: respEpoch)
+        let skinCfg = Baselines.metricCfg["skin_temp"]!
+        let skinHistory = ChargeBaselines.history(imported: [], own: computed.map { ($0.day, $0.skinTempC) },
+            anchorDay: anchorDay, cfg: skinCfg, baselineEpoch: recoveryEpoch)
+        let skinBase = Baselines.foldHistory(skinHistory.values, dayKeys: skinHistory.dayKeys,
+                                             cfg: skinCfg, baselineEpoch: recoveryEpoch)
         var updates: [SleepRecoveryUpdate] = []
         for row in computed.sorted(by: { $0.day < $1.day }) {
             guard let day = Baselines.isoEpochDay(row.day), day <= anchor,
                   anchor - day < ChargeBaselines.windowDays,
                   refreshBaseline || row.day == selectedDay,
                   let hrv = row.avgHrv, let rhr = row.restingHr else { continue }
-            let resolved = ChargeBaselines.resolve(imported: imported, own: computed, anchorDay: anchorDay,
-                                                  hrvEpoch: hrvEpoch, recoveryEpoch: recoveryEpoch)
-            let sourceDays = Set((imported + computed).filter { $0.day <= anchorDay }.map(\.day)).sorted()
-            let respEpoch = max(recoveryEpoch, Baselines.deviceEraEpoch(
-                sourceDays.map { (day: $0, sourceId: sourceByDay[$0] ?? importedSource) }))
-            let respBase = Baselines.foldHistory(resolved.respHistory.values, dayKeys: resolved.respHistory.dayKeys,
-                                                 cfg: Baselines.respCfg, baselineEpoch: respEpoch)
-            let skinCfg = Baselines.metricCfg["skin_temp"]!
-            let skinHistory = ChargeBaselines.history(imported: [], own: computed.map { ($0.day, $0.skinTempC) },
-                anchorDay: anchorDay, cfg: skinCfg, baselineEpoch: recoveryEpoch)
-            let skinBase = Baselines.foldHistory(skinHistory.values, dayKeys: skinHistory.dayKeys,
-                                                 cfg: skinCfg, baselineEpoch: recoveryEpoch)
             let skinDev: Double?
             if let mean = row.skinTempC {
                 skinDev = skinBase.usable ? (Baselines.deviation(mean, state: skinBase).delta * 100).rounded() / 100 : nil

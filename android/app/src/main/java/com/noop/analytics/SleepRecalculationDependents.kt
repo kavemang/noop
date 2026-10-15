@@ -12,21 +12,21 @@ object SleepRecalculationDependents {
         val selected = Baselines.isoEpochDay(selectedDay) ?: return emptyList()
         val anchor = Baselines.isoEpochDay(anchorDay) ?: return emptyList()
         if (anchor < selected || anchor - selected >= ChargeBaselines.windowDays) return emptyList()
+        val resolved = ChargeBaselines.resolve(imported, computed, anchorDay, hrvEpoch, recoveryEpoch)
+        val sourceDays = (imported + computed).filter { it.day <= anchorDay }.map { it.day }.distinct().sorted()
+        val respEpoch = maxOf(recoveryEpoch, Baselines.deviceEraEpoch(
+            sourceDays.map { it to (sourceByDay[it] ?: importedSource) }))
+        val respBase = Baselines.foldHistory(resolved.respHistory.values, resolved.respHistory.dayKeys,
+            Baselines.respCfg, respEpoch)
+        val skinCfg = Baselines.metricCfg.getValue("skin_temp")
+        val skinHistory = ChargeBaselines.history(emptyList(), computed.map { it.day to it.skinTempC },
+            anchorDay, skinCfg, recoveryEpoch)
+        val skinBase = Baselines.foldHistory(skinHistory.values, skinHistory.dayKeys, skinCfg, recoveryEpoch)
         return computed.sortedBy { it.day }.mapNotNull { row ->
             val day = Baselines.isoEpochDay(row.day) ?: return@mapNotNull null
             if (day > anchor || anchor - day >= ChargeBaselines.windowDays || (!refreshBaseline && row.day != selectedDay)) return@mapNotNull null
             val hrv = row.avgHrv ?: return@mapNotNull null
             val rhr = row.restingHr ?: return@mapNotNull null
-            val resolved = ChargeBaselines.resolve(imported, computed, anchorDay, hrvEpoch, recoveryEpoch)
-            val sourceDays = (imported + computed).filter { it.day <= anchorDay }.map { it.day }.distinct().sorted()
-            val respEpoch = maxOf(recoveryEpoch, Baselines.deviceEraEpoch(
-                sourceDays.map { it to (sourceByDay[it] ?: importedSource) }))
-            val respBase = Baselines.foldHistory(resolved.respHistory.values, resolved.respHistory.dayKeys,
-                Baselines.respCfg, respEpoch)
-            val skinCfg = Baselines.metricCfg.getValue("skin_temp")
-            val skinHistory = ChargeBaselines.history(emptyList(), computed.map { it.day to it.skinTempC },
-                anchorDay, skinCfg, recoveryEpoch)
-            val skinBase = Baselines.foldHistory(skinHistory.values, skinHistory.dayKeys, skinCfg, recoveryEpoch)
             val skinDev = row.skinTempC?.let { mean ->
                 if (!skinBase.usable) null else {
                     val scaled = Baselines.deviation(mean, skinBase).delta * 100.0

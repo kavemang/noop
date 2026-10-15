@@ -110,7 +110,9 @@ extension WhoopStore {
                                    arguments: [Self.encodeIntArray(values), deviceId, start])
                 }
                 if let bounds = selectedSleepBounds, !sleepSessions.isEmpty {
-                    precondition(deviceId.hasSuffix("-noop"))
+                    guard deviceId.hasSuffix("-noop") else {
+                        throw NSError(domain: "WhoopStore.selectedSleepScope", code: 2)
+                    }
                     let stored = try Self.readSleepSessions(deviceId: deviceId, from: bounds.lowerBound - 30 * 3600,
                         to: bounds.upperBound, limit: 4000, in: db).filter { bounds.contains($0.endTs) }
                     for stale in SleepSessionDedup.dedupe(stored, freshStarts: freshStarts).dropped {

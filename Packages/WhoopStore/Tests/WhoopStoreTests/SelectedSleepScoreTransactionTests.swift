@@ -73,6 +73,37 @@ final class SelectedSleepScoreTransactionTests: XCTestCase {
         XCTAssertEqual(provenance, "active-strap")
     }
 
+    func testSelectedCleanupRejectsImportedDeviceAndRollsBackWrites() async throws {
+        let store = try await WhoopStore.inMemory()
+        let imported = "my-whoop"
+        let old = sleep(1_623_711_540, 1_623_733_200)
+        let fresh = sleep(1_623_711_600, 1_623_736_800)
+        _ = try await store.upsertSleepSessions([old], deviceId: imported)
+        try await store.persistComputedScores(dailyMetrics: [daily(10)],
+            metricPoints: [.init(day: day, key: "sleep_performance", value: 20)],
+            provenance: [.init(day: day, key: "recovery", sourceId: "original-source")],
+            deviceId: imported, from: day, to: day)
+        do {
+            try await store.persistComputedScores(dailyMetrics: [daily(70)],
+                metricPoints: [.init(day: day, key: "sleep_performance", value: 80)],
+                provenance: [.init(day: day, key: "recovery", sourceId: "replacement-source")],
+                deviceId: imported, from: day, to: day, sleepSessions: [fresh],
+                selectedSleepBounds: 1_623_715_200...1_623_801_599)
+            XCTFail("selected cleanup must reject an imported device")
+        } catch {
+            XCTAssertEqual((error as NSError).domain, "WhoopStore.selectedSleepScope")
+            XCTAssertEqual((error as NSError).code, 2)
+        }
+        let rows = try await store.sleepSessions(deviceId: imported, from: 0, to: 2_000_000_000, limit: 100)
+        let scores = try await store.dailyMetrics(deviceId: imported, from: day, to: day)
+        let points = try await store.metricSeries(deviceId: imported, key: "sleep_performance", from: day, to: day)
+        let provenance = try await store.scoreInputSource(deviceId: imported, day: day, key: "recovery")
+        XCTAssertEqual(rows.map(\.startTs), [old.startTs])
+        XCTAssertEqual(scores.first?.recovery, 10)
+        XCTAssertEqual(points.first?.value, 20)
+        XCTAssertEqual(provenance, "original-source")
+    }
+
     func testCancelledSelectedWriteBanksNothing() async throws {
         let store = try await WhoopStore.inMemory()
         var finish: AsyncStream<Void>.Continuation!
