@@ -397,8 +397,6 @@ data class DataFreshness(
     val earliestDay: String? = null,
     val latestDay: String? = null,
 ) {
-    val hasAnyHistory: Boolean get() = importedDays > 0 || computedDays > 0 || appleDays > 0
-
     companion object {
         val EMPTY = DataFreshness()
     }
@@ -809,6 +807,12 @@ class WhoopRepository(
     fun computedDailyUnionFlow(activeStrapId: String, from: String, to: String): Flow<List<DailyMetric>> =
         unionDaysFlow(computedSourceIds(activeStrapId).map { dao.dailyMetricsRangeFlow(it, from, to) })
 
+    /** Imported-only daily rows over the same active-and-canonical union, the twin of
+     *  [computedDailyUnionFlow]. The Charge baselines (#2525) read the two buckets apart, because their rule
+     *  needs to know which nights are imported; [daysMergedFlow] has already blended them. */
+    fun importedDailyUnionFlow(activeStrapId: String, from: String, to: String): Flow<List<DailyMetric>> =
+        unionDaysFlow(importedSourceIds(activeStrapId).map { dao.dailyMetricsRangeFlow(it, from, to) })
+
     fun metricSeriesComputedUnionFlow(
         activeStrapId: String,
         key: String,
@@ -1177,14 +1181,20 @@ class WhoopRepository(
      *
      * Cost is one COUNT plus one MAX per id via [hrFingerprintWindow], index range walks that materialise
      * no rows, against the full per-day row fetches a caller would otherwise repeat. Compared only to
-     * itself in memory, so the format is free to change, and no caller persists it. The Swift
+     * itself, so the format carries no contract beyond equality. One caller does persist a value
+     * ([com.noop.widget.StressWidgetRefresh.storedFingerprint], whose worker has no process memory
+     * between wakes), and a stored value only ever compares equal to one written in the same format, so
+     * changing the format costs one extra scoring pass and can never produce a false hit. The Swift
      * `Repository.hrFingerprintUnion` is a twin in ROLE only, encoding the same facts differently; there
      * is no byte-identity contract between them and no oracle asserting one.
      *
-     * The single union witness for both callers (#2566): the cycle load cache in
-     * [com.noop.analytics.PhysiologicalStepCycleEngine] and the daytime stress lens memo in
-     * [com.noop.ui.selectedDaytimeStressMode]. Two of these that were free to disagree is what #2566
-     * removed, so route a new caller here rather than adding a third.
+     * The single union witness for every caller (#2566): the cycle load cache in
+     * [com.noop.analytics.PhysiologicalStepCycleEngine], the daytime stress lens memo in
+     * [com.noop.ui.selectedDaytimeStressMode], and all three stress gates standing in front of a union
+     * read (#2710) — [com.noop.widget.StressWidgetProducer]'s memo, the Stress screen's periodic
+     * re-read, and [com.noop.widget.StressWidgetRefresh.storedFingerprint]'s stored value. Two of these
+     * that were free to disagree is what #2566 removed, so route a new caller here rather than adding
+     * another.
      */
     suspend fun hrUnionFingerprint(activeDeviceId: String, from: Long, to: Long): String {
         // An explicit loop rather than joinToString: the per-id read suspends and that builder's lambda
@@ -2098,8 +2108,8 @@ class WhoopRepository(
 
     /** ALL imported sleep BLOCKS across every registered WHOOP (active first, archived included,
      *  canonical last), keeping every session
-     *  per day (a nap + a main night both survive) and dropping only EXACT-duplicate (startTs, endTs)
-     *  blocks recorded under both union ids , active strap FIRST so it keeps the surviving copy. The
+     *  per day (a nap + a main night both survive) and collapsing near-identical nights
+     *  recorded under different union ids, active strap FIRST so it keeps the surviving copy. The
      *  Sleep tab's chevron walk reads this instead of the single canonical id, so a night recorded under
      *  a re-added strap's fresh id still surfaces (the downstream per-day imported-wins split is the
      *  caller's, exactly as before). Mirrors Swift Repository.unionSleepSessions. */
@@ -2108,7 +2118,7 @@ class WhoopRepository(
         dedupSleepBlocks(rawWhoopSourceIds(deviceId).flatMap { dao.sleepSessions(it, from, to, limit) })
 
     /** The COMPUTED ("-noop") twin of [sleepSessionsUnion]: all computed sleep blocks across the computed
-     *  union ids, exact-duplicate blocks dropped (active's computed sibling first). Mirrors Swift
+     *  union ids, near-identical nights collapsed (active's computed sibling first). Mirrors Swift
      *  Repository.unionComputedSleepSessions. */
     suspend fun computedSleepSessionsUnion(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT):
         List<SleepSession> {
@@ -2544,14 +2554,28 @@ class WhoopRepository(
             return byDay.values.sortedBy { it.day }
         }
 
-        /** Drop sleep blocks sharing an identical (startTs, endTs) , the same physical night recorded
-         *  under two #814 union ids , keeping the FIRST seen (the callers pass active-strap-first lists,
-         *  so the active copy survives). Genuinely distinct blocks (a nap + a main night) are preserved.
+        /** Keep the active source's copy of a night when another source recorded nearly the same interval.
+         *  A majority of BOTH intervals must overlap, preserving a short nap inside a long night.
+         *  Separate blocks from one source remain distinct, including split sleeps.
          *  Pure companion form so the JVM tests exercise it without Room ([ResolverUnionTest]). Mirrors
          *  Swift Repository.dedupBlocks. (#1008) */
         internal fun dedupSleepBlocks(sessions: List<SleepSession>): List<SleepSession> {
             val seen = HashSet<Pair<Long, Long>>()
-            return sessions.filter { seen.add(it.startTs to it.endTs) }
+            val kept = ArrayList<SleepSession>()
+            for (session in sessions) {
+                if (!seen.add(session.startTs to session.endTs)) continue
+                val duplicate = kept.any { other ->
+                    if (session.deviceId == other.deviceId) return@any false
+                    val overlap = minOf(session.endTs, other.endTs) -
+                        maxOf(session.effectiveStartTs, other.effectiveStartTs)
+                    val duration = session.endTs - session.effectiveStartTs
+                    val otherDuration = other.endTs - other.effectiveStartTs
+                    duration > 0 && otherDuration > 0 &&
+                        overlap > duration / 2 && overlap > otherDuration / 2
+                }
+                if (!duplicate) kept.add(session)
+            }
+            return kept
         }
 
         /** True when [replacing] is stored under a DIFFERENT primary key than the row about to be written,
