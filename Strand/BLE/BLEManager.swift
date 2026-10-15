@@ -5102,8 +5102,17 @@ public final class BLEManager: NSObject, ObservableObject {
     private func resumeSystemConnection(reason: String) async {
         await startupGate.resume(
             prepare: { await self.prepareStoreForStartup() },
+            radioIsPoweredOn: { self.central.state == .poweredOn },
+            onRefusal: { refusal in
+                switch refusal {
+                case .storeNotReady:
+                    self.log("Startup (\(reason)): store preparation not ready — deferring until a startup retry")
+                case .radioNotPoweredOn:
+                    self.log("Startup (\(reason)): central not poweredOn yet (state=\(self.central.state.rawValue)) — deferring to poweredOn")
+                }
+            },
             isAllowed: {
-                self.central.state == .poweredOn && !self.intentionalDisconnect
+                !self.intentionalDisconnect
                     && self.whoopConnectAllowed("startup/\(reason)")
             },
             action: {
@@ -5930,8 +5939,17 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
             Task { @MainActor in
                 await startupGate.resume(
                     prepare: { await self.prepareStoreForStartup() },
+                    radioIsPoweredOn: { self.central.state == .poweredOn },
+                    onRefusal: { refusal in
+                        switch refusal {
+                        case .storeNotReady:
+                            self.log("Startup (restored-didConnect): store preparation not ready — deferring until a startup retry")
+                        case .radioNotPoweredOn:
+                            self.log("Startup (restored-didConnect): central not poweredOn yet (state=\(self.central.state.rawValue)) — deferring to poweredOn")
+                        }
+                    },
                     isAllowed: {
-                        self.central.state == .poweredOn && !self.intentionalDisconnect
+                        !self.intentionalDisconnect
                             && self.restoredPeripheral?.identifier == peripheral.identifier
                             && peripheral.state == .connected
                             && self.whoopConnectAllowed("startup/restored-didConnect")

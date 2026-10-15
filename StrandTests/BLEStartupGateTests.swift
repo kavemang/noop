@@ -18,13 +18,13 @@ final class BLEStartupGateTests: XCTestCase {
         }
         let check: @MainActor () -> Bool = { gateReads += 1; return allowed }
         let poweredOn = Task { @MainActor in
-            await gate.resume(prepare: prepare, isAllowed: check) { actions.append("connect") }
+            await gate.resume(prepare: prepare, radioIsPoweredOn: { true }, onRefusal: { _ in XCTFail("Unexpected startup refusal") }, isAllowed: check) { actions.append("connect") }
         }
         while releaseStore == nil { await Task.yield() }
         var secondEntered = false
         let restored = Task { @MainActor in
             secondEntered = true
-            await gate.resume(prepare: prepare, isAllowed: check) { actions.append("discover") }
+            await gate.resume(prepare: prepare, radioIsPoweredOn: { true }, onRefusal: { _ in XCTFail("Unexpected startup refusal") }, isAllowed: check) { actions.append("discover") }
         }
         // Let the second callback enter the shared preparation while the first is suspended.
         while !secondEntered { await Task.yield() }
@@ -43,7 +43,7 @@ final class BLEStartupGateTests: XCTestCase {
     func testSelectedWhoopResumesAfterStoreIsReady() async {
         let gate = BLEStartupGate()
         var order: [String] = []
-        await gate.resume(prepare: { order.append("store"); return true }, isAllowed: {
+        await gate.resume(prepare: { order.append("store"); return true }, radioIsPoweredOn: { true }, onRefusal: { _ in XCTFail("Unexpected startup refusal") }, isAllowed: {
             order.append("gate")
             return true
         }) { order.append("discover") }
@@ -55,30 +55,45 @@ final class BLEStartupGateTests: XCTestCase {
         let gate = BLEStartupGate()
         var reads = 0
         var actions = 0
-        await gate.resume(prepare: { false }, isAllowed: { reads += 1; return true }) { actions += 1 }
+        var refusals: [BLEStartupGate.Refusal] = []
+        await gate.resume(prepare: { false }, radioIsPoweredOn: { XCTFail("Radio read before store readiness"); return true }, onRefusal: { refusals.append($0) }, isAllowed: { reads += 1; return true }) { actions += 1 }
         XCTAssertEqual(reads, 0)
         XCTAssertEqual(actions, 0)
-        await gate.resume(prepare: { true }, isAllowed: { reads += 1; return true }) { actions += 1 }
+        XCTAssertEqual(refusals, [.storeNotReady])
+        await gate.resume(prepare: { true }, radioIsPoweredOn: { true }, onRefusal: { _ in XCTFail("Unexpected startup refusal") }, isAllowed: { reads += 1; return true }) { actions += 1 }
         XCTAssertEqual(reads, 1)
         XCTAssertEqual(actions, 1)
     }
 
     @MainActor
-    func testRadioOrDeviceChangeDuringStoreOpenIsCheckedAfterAwait() async {
+    func testRadioChangeDuringStoreOpenIsCheckedAfterAwait() async {
         let gate = BLEStartupGate()
         var releaseStore: CheckedContinuation<Void, Never>?
-        var allowed = true
+        var radioReady = true
+        var refusals: [BLEStartupGate.Refusal] = []
         var actions = 0
         let startup = Task { @MainActor in
             await gate.resume(prepare: {
                 await withCheckedContinuation { releaseStore = $0 }
                 return true
-            }, isAllowed: { allowed }) { actions += 1 }
+            }, radioIsPoweredOn: { radioReady }, onRefusal: { refusals.append($0) }, isAllowed: { XCTFail("Policy read after radio changed"); return true }) { actions += 1 }
         }
         while releaseStore == nil { await Task.yield() }
-        allowed = false
+        radioReady = false
         releaseStore?.resume()
         await startup.value
         XCTAssertEqual(actions, 0)
+        XCTAssertEqual(refusals, [.radioNotPoweredOn])
     }
+    @MainActor
+    func testRadioRefusalNamesReasonWithoutReadingDevicePolicy() async {
+        let gate = BLEStartupGate()
+        var refusals: [BLEStartupGate.Refusal] = []
+        await gate.resume(prepare: { true }, radioIsPoweredOn: { false },
+                          onRefusal: { refusals.append($0) },
+                          isAllowed: { XCTFail("Device policy read with radio unavailable"); return true },
+                          action: { XCTFail("Startup ran with radio unavailable") })
+        XCTAssertEqual(refusals, [.radioNotPoweredOn])
+    }
+
 }
