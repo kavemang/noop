@@ -5,13 +5,13 @@ final class PhysiologicalStepsClassificationTests: XCTestCase {
     // Expected output comes from the standalone optimized Swift oracle, also pinned on Kotlin.
     func testClassificationOracle() {
         XCTAssertEqual(classificationOracle(), """
-        -18000:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCCCCCCCCCCCCCCCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
-        0:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCCCCCCCCCCCCCCCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
-        46800:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCCCCCCCCCCCCCCCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+        -18000:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+        0:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+        46800:NNNNNNNNNNNNNNNNNNNNNCNCNCNCNCNCNNNNNNNNNNNNNCCCCCNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
         early1945:M:1799100
         early1900:M:1796400
         overnight:M:1807200
-        shift:M:1771200
+        shift:N:-
         short:N:-
         floor:M:1796400
         nap:N:-
@@ -35,6 +35,16 @@ final class PhysiologicalStepsClassificationTests: XCTestCase {
         let windows = PhysiologicalSteps.cycleWindows(boundaries, now: 23 * 86_400 + 19 * 3_600)
         XCTAssertEqual(windows.count, 3)
         XCTAssertEqual(windows.map { $0.endExclusive - $0.onset }, [86_400, 86_400, 86_400])
+    }
+
+    func testLongDaytimeNapCannotHideAShorterValidMainNight() {
+        let base = 20 * 86_400
+        let classified = PhysiologicalSteps.classifyForCycle([
+            .init(onset: base + 3_600, end: base + 4 * 3_600 + 30 * 60, id: "night"),
+            .init(onset: base + 13 * 3_600, end: base + 19 * 3_600, id: "nap")
+        ], offsetSec: 0, habitualMidsleepSec: nil)
+        XCTAssertEqual(classified.first { $0.id == "night" }?.kind, .mainSleep)
+        XCTAssertEqual(classified.first { $0.id == "nap" }?.kind, .nap)
     }
 
     private func classificationOracle() -> String {

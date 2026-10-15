@@ -40,7 +40,7 @@ object PhysiologicalSteps {
 
 
     /**
-     * Apply the same user-visible main-vs-nap shape used by the sleep surfaces: only the canonical main
+     * Apply the same user-visible main-vs-nap shape used by the sleep surfaces: only the canonical overnight
      * group can be MAIN, it must total at least three hours, and every other/twinless-explicit block is NAP.
      */
     fun classifyForCycle(
@@ -58,12 +58,14 @@ object PhysiologicalSteps {
                 val b = blocks[it]
                 SleepStageTotals.NightBlock(b.effectiveOnset, b.end)
             }
-            // Keep the cycle duration floor, then rank early-bedtime and shift sleeps with the canonical
-            // selector. Its timing bonus is a preference, not an onset-band eligibility gate (#2626).
+            // Eliminate nap-shaped GROUPS before choosing a winner. Otherwise a six-hour afternoon nap can
+            // win the generic duration scorer, fail the daytime guard, and hide a valid shorter night.
             val eligible = SleepStageTotals.bridgedNightGroups(selectableNightBlocks, tzOffsetSeconds)
                 .filter { group ->
                     val total = group.indices.sumOf { i -> selectableNightBlocks[i].durationS.coerceAtLeast(0L) }
-                    total >= MIN_MAIN_SLEEP_SECONDS
+                    val onset = group.indices.minOfOrNull { selectableNightBlocks[it].start }
+                    total >= MIN_MAIN_SLEEP_SECONDS && onset != null &&
+                        SleepStageTotals.isOvernightOnset(onset, tzOffsetSeconds)
                 }
                 .flatMap { it.indices }
                 .distinct()
