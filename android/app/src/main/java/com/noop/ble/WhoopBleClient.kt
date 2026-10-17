@@ -5154,12 +5154,13 @@ class WhoopBleClient(
      */
     // ---- WHOOP MG ECG ("Labrador") turn-on probe — twin of macOS BLEManager.ecg* ----------------
 
-    /** Listen window after the turn-on burst, matching macOS `ecgProbeWindow`. */
-    private val ECG_PROBE_WINDOW_SECONDS = 30
+    /** Listen window for a run waiting on a COMMAND_RESPONSE, matching macOS `ecgProbeWindow`.
+     *  Derived from [Whoop5EcgProbe.Window] so the two platforms cannot hold different numbers: that
+     *  they both held 30 independently is how the window outlived the evidence against it (#891). */
+    private val ECG_PROBE_WINDOW_SECONDS = Whoop5EcgProbe.Window.SELECT_OR_STOP
 
-    /** Detailed candidate lines are capped; the PACKET COUNT is not, so the verdict stays complete
-     *  while a chatty stream cannot grow the strap log without bound. Matches macOS. */
-    private val ECG_PROBE_MAX_CANDIDATES = 12
+    /** The CAPTURE run's window. Longer, because a reading's terminal frame lands at 38 to 39 s. */
+    private val ECG_PROBE_CAPTURE_WINDOW_SECONDS = Whoop5EcgProbe.Window.CAPTURE
 
     /**
      * Guards every probe accumulator below. [noteEcgProbeCandidate] runs on the BINDER thread (the
@@ -5177,6 +5178,21 @@ class WhoopBleClient(
     private val ecgProbeCandidates = mutableListOf<String>()
 
     private var ecgProbePacketsSeen = 0
+
+    /** Supersedes a previous run's pending verdict post when a run is re-armed. Guarded by
+     *  [ecgProbeLock], because a terminal frame re-arms from the binder thread. */
+    private var ecgProbeRunToken = 0
+
+    /** When the run in flight began, so the report states the time actually listened rather than the
+     *  window asked for: a terminal frame ends a run early, so those stopped being the same number. */
+    private var ecgProbeStartedAtMs = 0L
+
+    /** Whether this run already pushed its deadline out on a terminal frame. Once only, or a terminal
+     *  stream would postpone the verdict forever. */
+    private var ecgProbeTerminalExtended = false
+
+    /** How many TERMINAL candidate lines this run has kept, against the reserve the cap holds back. */
+    private var ecgProbeTerminalLinesKept = 0
 
     /**
      * True only while a probe run is sending. The send() allowlist reads this, so the three toggles are
@@ -5250,24 +5266,68 @@ class WhoopBleClient(
         send(cmd, Whoop5Ecg.commandPayload(arg).map { it.toByte() }.toByteArray())
     }
 
-    private fun beginEcgProbeRun() {
+    /**
+     * [keepingEvidence] carries a capture's collected R17 lines, packet count and start time into the
+     * STOP run that follows it, instead of clearing them with the steps.
+     *
+     * Without it the stop discards exactly what this probe exists to retain. The reading completes at 38
+     * to 39 s (#891) while the sheet still reads "waiting", so the natural next action is to stop a
+     * session the user can tell has finished, and that wiped every candidate line, the terminal frame
+     * among them. The 30 s window hid this by rendering the verdict before most people got there.
+     *
+     * The START TIME travels with the packets on purpose. The report states "packets seen in Ns", so
+     * keeping a count from a 47 s capture under a 30 s stop window would attribute those packets to a
+     * span that did not collect them.
+     */
+    private fun beginEcgProbeRun(keepingEvidence: Boolean = false) {
         synchronized(ecgProbeLock) {
             ecgProbeSteps.clear()
-            ecgProbeCandidates.clear()
-            ecgProbePacketsSeen = 0
+            if (!keepingEvidence) {
+                ecgProbeCandidates.clear()
+                ecgProbePacketsSeen = 0
+                ecgProbeStartedAtMs = System.currentTimeMillis()
+            }
+            ecgProbeRunToken += 1
+            ecgProbeTerminalExtended = false
+            ecgProbeTerminalLinesKept = 0
         }
         ecgProbeListening = true
     }
 
-    private fun scheduleEcgProbeVerdict() {
+    private fun scheduleEcgProbeVerdict(windowSeconds: Int = ECG_PROBE_WINDOW_SECONDS) {
+        val token = synchronized(ecgProbeLock) { ecgProbeRunToken }
         handler.postDelayed({
-            ecgProbeListening = false
-            val (steps, packets, candidates) = synchronized(ecgProbeLock) {
-                Triple(ecgProbeSteps.toList(), ecgProbePacketsSeen, ecgProbeCandidates.toList())
+            // Token check, not removeCallbacks: a terminal frame re-arms the run from the binder thread
+            // and a second user tap re-arms from main, so a stale post must simply do nothing. Twin of
+            // the macOS run-token guard.
+            val (stale, steps, packets, candidates, listened) = synchronized(ecgProbeLock) {
+                EcgVerdictSnapshot(
+                    ecgProbeRunToken != token,
+                    ecgProbeSteps.toList(),
+                    ecgProbePacketsSeen,
+                    ecgProbeCandidates.toList(),
+                    // Integer rounding rather than a Double hop: this is a whole number of seconds in
+                    // a report line, and it matches the Swift side's `.rounded()` for a positive span.
+                    ((System.currentTimeMillis() - ecgProbeStartedAtMs + 500L) / 1000L).toInt(),
+                )
             }
-            log(Whoop5EcgProbe.report(steps, packets, candidates, ECG_PROBE_WINDOW_SECONDS))
-        }, ECG_PROBE_WINDOW_SECONDS * 1000L)
+            if (stale) return@postDelayed
+            ecgProbeListening = false
+            // The time LISTENED, not the window asked for. The verdict text quotes this number ("no ECG
+            // packet arrived in Ns"), so quoting the request would have the report claim a window it
+            // did not run.
+            log(Whoop5EcgProbe.report(steps, packets, candidates, listened))
+        }, windowSeconds * 1000L)
     }
+
+    /** The verdict's inputs, read under [ecgProbeLock] in one go so the report cannot mix two runs. */
+    private data class EcgVerdictSnapshot(
+        val stale: Boolean,
+        val steps: List<Whoop5EcgProbe.Step>,
+        val packets: Int,
+        val candidates: List<String>,
+        val listenedSeconds: Int,
+    )
 
     /**
      * The START list's first member: ABORT_HISTORICAL_TRANSMITS (20), immediately ahead of `124`.
@@ -5339,7 +5399,7 @@ class WhoopBleClient(
             // Scheduled in the finally, because it is what CLOSES the listen window. If a send threw,
             // an early return would leave `ecgProbeListening` true forever and the triage running on
             // every frame for the life of the process.
-            scheduleEcgProbeVerdict()
+            scheduleEcgProbeVerdict(ECG_PROBE_CAPTURE_WINDOW_SECONDS)
         }
     }
 
@@ -5358,7 +5418,15 @@ class WhoopBleClient(
             }
             return
         }
-        if (reportsResult) beginEcgProbeRun() else synchronized(ecgProbeLock) { ecgProbeSteps.clear() }
+        // Read BEFORE the run is re-armed: an open window means the capture's verdict has not rendered
+        // yet, so its evidence has never been reported and must survive into this run. Once the verdict
+        // has rendered the lines are already out, and a later stop is a genuinely separate run.
+        val captureStillListening = ecgProbeListening
+        if (reportsResult) {
+            beginEcgProbeRun(keepingEvidence = captureStillListening)
+        } else {
+            synchronized(ecgProbeLock) { ecgProbeSteps.clear() }
+        }
         log("ECG probe: stopping ECG data generation and both streams")
         ecgProbeArmed = true
         try {
@@ -5387,10 +5455,35 @@ class WhoopBleClient(
     private fun noteEcgProbeCandidate(frame: ByteArray) {
         if (frame.size < 12) return
         val packet = Whoop5Ecg.r17FromFrame(frame) ?: return
-        synchronized(ecgProbeLock) {
+        // A TERMINAL frame is kept even past the cap, and ends the run on a grace period rather than on
+        // the frame itself. Both halves come from #891: the result, average HR and reason mask populate
+        // only on that frame, so the old flat cap kept seconds 1 to 12 and discarded the one frame that
+        // carried the answer; and the variability field reads 0xffff for several seconds after it, so
+        // stopping on the frame would pin the unset value as the reading's own.
+        var grace: Int? = null
+        val keep = synchronized(ecgProbeLock) {
             ecgProbePacketsSeen += 1
-            if (ecgProbeCandidates.size >= ECG_PROBE_MAX_CANDIDATES) return
+            grace = Whoop5EcgProbe.terminalGraceSeconds(packet.isTerminal, ecgProbeTerminalExtended)
+            if (grace != null) ecgProbeTerminalExtended = true
+            val retain = Whoop5EcgProbe.retainsCandidate(
+                linesKept = ecgProbeCandidates.size,
+                terminalLinesKept = ecgProbeTerminalLinesKept,
+                isTerminal = packet.isTerminal,
+            )
+            if (retain && packet.isTerminal) ecgProbeTerminalLinesKept += 1
+            retain
         }
+        grace?.let { seconds ->
+            log(
+                "ECG probe: terminal frame (state=${packet.classifierState} " +
+                    "progress=${packet.progress.raw}) — listening ${seconds}s more before the verdict",
+            )
+            // Re-arms the run: beginEcgProbeRun bumped the token at the start, and scheduling against a
+            // fresh token strands the pending verdict post. Same mechanism a second user tap uses.
+            synchronized(ecgProbeLock) { ecgProbeRunToken += 1 }
+            scheduleEcgProbeVerdict(seconds)
+        }
+        if (!keep) return
         // The classifier byte is logged as a NUMBER, never as its token name: a strap log is a shareable
         // artefact, and no line in it should read like a clinical finding.
         //
@@ -6777,11 +6870,43 @@ class WhoopBleClient(
         // re-pair guide the stale-bond / #617 paths show and PAUSE auto-reconnect (reusing the #747/#844
         // machinery [handleDisconnect] already honours) so the battery stops draining. A user Connect or a
         // genuine bond re-arms it via [bondWatchdogBackoff].reset().
-        val gaveUp = bondWatchdogBackoff.recordBounce()
+        // Only a link with somewhere to WRITE the handshake can speak for bonding, and
+        // [commandChannelReady] is already the resolver for that question. Two ways to lack one, both
+        // live on a 5/MG at range: discovery has not returned yet (the window can expire on a 14-17s MTU
+        // negotiation alone, against a 1.5s expected wait), or it returned without the custom service.
+        // Counting either walked the give-up to a 5h 57m auto-reconnect pause that blamed a strap which
+        // had not been asked anything. The window still escalates either way — a slow link should get
+        // longer — which is why the two counters are separate.
+        val attributable = commandChannelReady
+        val gaveUp = bondWatchdogBackoff.recordBounce(attributable = attributable)
+        // Bounded in BOTH directions. Excusing these from the pairing give-up without capping them would
+        // trade a wrong 6-hour pause for an endless bounce loop — the drain #971 exists to end. Different
+        // consequence though: stand the watchdog down and LEAVE THE LINK UP. Auto-reconnect keeps running
+        // because a weak link is transient, and the standard HR profile on that link may be the only data
+        // a strap that cannot bond will ever give (#1635).
+        if (!attributable && bondWatchdogBackoff.shouldStopBouncingWithoutCommandChannel()) {
+            // The trade, stated rather than left to be discovered: the watchdog is down for the REST of
+            // this link, so if discovery finally returns and a handshake does go out on it, nothing times
+            // that handshake out. Acceptable, because the alternative was bouncing forever, and a stuck
+            // handshake still ends in the supervision timeout the log is already full of. The next link
+            // re-arms at its own discovery.
+            log("Service discovery still had not returned after " +
+                "${bondWatchdogBackoff.unattributableBounces} bounces — standing the watchdog down for " +
+                "the rest of this link instead of bouncing again. Auto-reconnect is NOT paused: nothing " +
+                "here is evidence about pairing, and the link is left up in case live HR is still " +
+                "arriving on it. " + bondWatchdogContext())
+            cancelBondWatchdog()
+            return
+        }
         intentionalDisconnect = false
         if (gaveUp) {
-            log("Bond handshake never completed after ${bondWatchdogBackoff.consecutiveBounces} escalating tries " +
-                bondWatchdogContext() + " — pausing auto-reconnect and surfacing the re-pair guide (#971)")
+            // attributableBounces, not consecutiveBounces: the threshold is measured against the former,
+            // so quoting the latter would claim more handshake attempts than were made — the same
+            // over-claim, in the line that tells the user to go re-pair.
+            log("Bond handshake never completed after ${bondWatchdogBackoff.attributableBounces} escalating " +
+                "tries (${bondWatchdogBackoff.consecutiveBounces} link bounces in total, the rest before " +
+                "the command channel existed) " + bondWatchdogContext() +
+                " — pausing auto-reconnect and surfacing the re-pair guide (#971)")
             autoReconnectPausedForBondLoop = true
             bondLoopPausedAtMs = System.currentTimeMillis()   // the #78 hole-4 salvage probe covers this pause too
                 // #1539: park the connect in the same breath as the pause, so this can end while backgrounded.
@@ -6799,8 +6924,23 @@ class WhoopBleClient(
                 ) }
             }
         } else {
-            log("Bond handshake stuck for ${bondWatchdogBackoff.currentWindowMs() / 1000}s — bouncing link to retry " +
-                "(attempt ${bondWatchdogBackoff.consecutiveBounces}, #50/#971) " + bondWatchdogContext())
+            // Two different findings, so two different sentences. Saying "bond handshake stuck" for a link
+            // that never finished discovery names a cause that was never reached — the attribution rule,
+            // and the reason this whole branch was rewritten.
+            log(
+                if (attributable) {
+                    "Bond handshake stuck for ${bondWatchdogBackoff.currentWindowMs() / 1000}s — bouncing " +
+                        "link to retry (attempt ${bondWatchdogBackoff.consecutiveBounces}, #50/#971) " +
+                        bondWatchdogContext()
+                } else {
+                    "Service discovery had not returned after " +
+                        "${bondWatchdogBackoff.currentWindowMs() / 1000}s — bouncing link to retry (attempt " +
+                        "${bondWatchdogBackoff.consecutiveBounces}, #50/#971). NOT counted toward the " +
+                        "re-pair give-up: nothing was discovered and no handshake was written, so this says " +
+                        "nothing about whether the strap will bond. Usually a weak link — check the RSSI " +
+                        "and the MTU settle time above. " + bondWatchdogContext()
+                },
+            )
             // #1095: a 5/MG whose CLIENT_HELLO confirmed write never ACKs (writeInFlight still true, never
             // bonded) gets NEITHER the 5/15-refusal pairing hint NOR — until the 4-bounce give-up — the
             // re-pair guide, so it loops for ~46s with no advice. Surface a 5/MG-tailored re-pair guide on
@@ -6808,10 +6948,15 @@ class WhoopBleClient(
             // Guidance STRING ONLY — the loop is unchanged (the give-up still pauses at the cap, and its own
             // `reconnectGuide == null` check won't overwrite this). Unpairing is the right first step for any
             // 5/MG that connects but never bonds, so surfacing it early is safe even before the capture.
+            // attributableBounces, not consecutiveBounces: this guide is about a hello that went out and
+            // was never answered, so a weak-link bounce that never reached the command channel must
+            // neither advance it nor be counted in what it claims. Reading the total would surface a
+            // "CLIENT_HELLO never acknowledged" guide off bounces where no hello existed, and reach the
+            // threshold a link or two early.
             if (connectedFamily == DeviceFamily.WHOOP5 && !didBond && writeInFlight &&
-                bondWatchdogBackoff.consecutiveBounces >= 2 && _state.value.reconnectGuide == null
+                bondWatchdogBackoff.attributableBounces >= 2 && _state.value.reconnectGuide == null
             ) {
-                log("WHOOP 5/MG: CLIENT_HELLO never acknowledged across ${bondWatchdogBackoff.consecutiveBounces} silent bounces — surfacing the re-pair guide early (#1095)")
+                log("WHOOP 5/MG: CLIENT_HELLO never acknowledged across ${bondWatchdogBackoff.attributableBounces} silent bounces — surfacing the re-pair guide early (#1095)")
                 _state.update { it.copy(reconnectGuide = """
                     Your WHOOP 5.0/MG connects and reads battery, but never finishes pairing with NOOP, so no health data comes through. This is almost always the official WHOOP app still holding the strap (a 5.0 pairs with one phone at a time), or a stale Bluetooth pairing:
 
@@ -10127,7 +10272,17 @@ class WhoopBleClient(
         sessionStarted = true
         val cmd = cmdCharacteristic
         if (cmd == null) {
-            log("Subscribed, but no command characteristic — cannot open a session")
+            // The watchdog was armed at discovery, before discovery could report what it found. With no
+            // command characteristic there is no handshake to write and none to time out, so leaving it
+            // armed would bounce a link whose only fault is that the custom service was not there. The
+            // third stand-down site, after the #1635 suppression and the pairing deferral; the give-up
+            // is separately protected by [BondWatchdogBackoff.recordBounce]'s attributability.
+            cancelBondWatchdog()
+            log(
+                "Subscribed, but no command characteristic — cannot open a session. The standard HR and " +
+                    "battery profiles stay subscribed, so live HR is unaffected; the bond watchdog is " +
+                    "stood down because there is no handshake on this link for it to time out.",
+            )
             return
         }
         when (connectedFamily) {
@@ -11729,8 +11884,9 @@ class WhoopBleClient(
         // GATT_CONN_TIMEOUT). Feed THIS drop into the SAME #971 give-up counter so the loop is bounded and
         // hands off to the identical re-pair guide + paused auto-reconnect. `didBond` is still valid here
         // ([reset] clears it below); [shouldCountNeverBondedSelfDrop] excludes our own localTerminate bounce
-        // to avoid double-counting a cycle. recordBounce() (short-circuited off the gate) increments the
-        // shared streak and returns true only on the bounce that first crosses the give-up threshold.
+        // to avoid double-counting a cycle. recordBounce (short-circuited off the gate) increments the
+        // shared streak and returns true only on the bounce that first crosses the give-up threshold. It
+        // is passed attributable=true because this path fires only where the hello actually went out.
         if (shouldCountNeverBondedSelfDrop(
                 wasConnected = wasConnected,
                 didBond = didBond,
@@ -11754,7 +11910,9 @@ class WhoopBleClient(
                             helloOverrideAttempts,
                         )
                 }.getOrDefault(false),
-            ) && bondWatchdogBackoff.recordBounce()
+            // attributable: [shouldCountNeverBondedSelfDrop] fires only where the hello was actually
+            // sent, so the command channel existed and this drop IS evidence about bonding.
+            ) && bondWatchdogBackoff.recordBounce(attributable = true)
         ) {
             log("Strap connects and subscribes but never finishes pairing, then self-drops before the bond watchdog fires (${bondWatchdogBackoff.consecutiveBounces} cycles) " +
                 bondWatchdogContext() + " — pausing auto-reconnect and surfacing the re-pair guide (#982/#971)")
@@ -11834,8 +11992,9 @@ class WhoopBleClient(
         // flags, and it needs the disconnect `status` (which reset() does not receive). A probe still
         // mid-subscribe when the link goes is stage 1 ending with the LINK; a probe mid-GET_CLOCK-wait
         // is stage 2. Both get a verdict line so the silence budget advances correctly — EXCEPT when the
-        // link was terminated LOCALLY (status=22), which is our own stack ending the link and not a strap
-        // verdict. A local teardown is inconclusive and does NOT charge the budget (#1804).
+        // link was terminated LOCALLY (status=22), which does not say which side ended it: our paths
+        // produce a status 22, and so does the strap ending the link when a write is challenged. That is
+        // unattributable rather than ours, so it does NOT charge the budget (#1804).
         //
         // Cancel the probe runnables BEFORE emitting the verdict, so a runnable already dequeued and
         // waiting to run cannot fire on the stale state. reset() cancels them again idempotently.
@@ -11850,9 +12009,9 @@ class WhoopBleClient(
                     stage = stage,
                     localTeardownOrigin = lastLocalTeardown,
                 ))
-                // #1804: a local teardown is not a strap verdict, so it does NOT charge the silence
-                // budget. But it DOES charge the inconclusive budget, so a strap whose every link is
-                // torn down locally does not retry forever.
+                // #1804: a local teardown cannot be attributed to either side from the status alone, so
+                // it does NOT charge the silence budget. It DOES charge the inconclusive budget, so a
+                // strap whose every link ends this way does not retry forever.
                 chargeUnbondedProbeInconclusive()
             } else {
                 log(
