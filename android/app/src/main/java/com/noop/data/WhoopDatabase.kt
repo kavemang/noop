@@ -929,12 +929,6 @@ abstract class WhoopDatabase : RoomDatabase() {
             }
         }
 
-        internal val MIGRATION_41_42 = object : Migration(41, 42) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                for (stmt in SCORE_COMPUTATION_PROVENANCE_MIGRATION_SQL) db.execSQL(stmt)
-            }
-        }
-
         /**
          * #1636: keep the nightly ABSOLUTE skin temperature beside the deviation derived from it.
          *
@@ -1119,6 +1113,12 @@ abstract class WhoopDatabase : RoomDatabase() {
          */
         internal val MIGRATION_40_41 = object : Migration(40, 41) {
             override fun migrate(db: SupportSQLiteDatabase) { db.execSQL(WHOOP5_RR_FILL_MIGRATION_SQL) }
+        }
+
+        internal val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (stmt in SCORE_COMPUTATION_PROVENANCE_MIGRATION_SQL) db.execSQL(stmt)
+            }
         }
 
         /**
