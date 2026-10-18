@@ -79,18 +79,24 @@ object AnalyticsEngine {
      * Pair the strap's WRIST_OFF/WRIST_ON events into off-wrist [start, end) intervals for the sleep
      * detector's fractional wear filter (#500; design credited to j0b-dev's #504). Each WRIST_OFF opens
      * an interval that closes at the next WRIST_ON, or at [windowEnd] if the strap is still off at the
-     * end of the read window. Events need not be pre-sorted; kinds are formatted "NAME(n)" (e.g.
-     * "WRIST_OFF(10)"), matched by prefix. Repeated OFFs/ONs without a partner are coalesced. Mirrors Swift.
+     * end of the read window. An unmatched tail may end earlier when sustained valid HR resumes;
+     * explicit OFF/ON pairs are never shortened. Events need not be pre-sorted; kinds are formatted "NAME(n)" (e.g.
+     * "WRIST_OFF(10)"), matched by prefix. Repeated OFFs/ONs without a partner are coalesced.
+     * Swift twin: `AnalyticsEngine.offWristIntervals`.
      */
-    fun offWristIntervals(events: List<EventRow>, windowEnd: Long): List<Pair<Long, Long>> {
+    fun offWristIntervals(events: List<EventRow>, windowEnd: Long,
+                          hr: List<HrSample> = emptyList()): List<Pair<Long, Long>> {
         val wear = events
             .filter { it.kind.startsWith("WRIST_OFF") || it.kind.startsWith("WRIST_ON") }
             .sortedBy { it.ts }
         val intervals = ArrayList<Pair<Long, Long>>()
         var offStart: Long? = null
+        var lastOff: Long? = null
         for (e in wear) {
+            if (e.ts > windowEnd) continue
             if (e.kind.startsWith("WRIST_OFF")) {
-                if (offStart == null) offStart = e.ts            // ignore repeated OFFs
+                if (offStart == null) offStart = e.ts
+                lastOff = e.ts // a repeated OFF invalidates evidence before it
             } else {                                             // WRIST_ON closes an open off-wrist span
                 val s = offStart
                 if (s != null && e.ts > s) intervals.add(s to e.ts)
@@ -98,7 +104,10 @@ object AnalyticsEngine {
             }
         }
         val s = offStart
-        if (s != null && windowEnd > s) intervals.add(s to windowEnd)
+        if (s != null && windowEnd > s) {
+            val end = WristWearRecovery.firstSustainedHR(hr, lastOff ?: s, windowEnd) ?: windowEnd
+            if (end > s) intervals.add(s to end)
+        }
         return intervals
     }
 
@@ -855,7 +864,10 @@ object AnalyticsEngine {
                     tanaka = if (profile.age > 0) StrainScorer.tanakaHRmax(profile.age) else null,
                     observedPeak = hrForPeak.maxOfOrNull { it.bpm }?.toDouble(),
                     restingHR = restForStrain,
-                ),
+                ) +
+                    // The raw peak is usually one isolated sample on a ring; this is the value held (#2438).
+                    StrainScorer.sustainedPeakField(StrainScorer.sustainedPeak(hrForPeak)) +
+                    StrainScorer.sustainedPeakSpanField(StrainScorer.sustainedPeakSpan(hrForPeak)),
             )
         }
 
