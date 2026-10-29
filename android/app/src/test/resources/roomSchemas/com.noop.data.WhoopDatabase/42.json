@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 42,
-    "identityHash": "d723105c8d05d8fb1c667d1f33072c81",
+    "identityHash": "a641357e666748e0d6ddda67b69b9325",
     "entities": [
       {
         "tableName": "device",
@@ -879,68 +879,6 @@
         "foreignKeys": []
       },
       {
-        "tableName": "scoreComputationProvenance",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `day` TEXT NOT NULL, `key` TEXT NOT NULL, `computedBy` TEXT NOT NULL, `computedAt` INTEGER NOT NULL, `scope` TEXT NOT NULL, PRIMARY KEY(`deviceId`, `day`, `key`))",
-        "fields": [
-          {
-            "fieldPath": "deviceId",
-            "columnName": "deviceId",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "day",
-            "columnName": "day",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "key",
-            "columnName": "key",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "computedBy",
-            "columnName": "computedBy",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "computedAt",
-            "columnName": "computedAt",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "scope",
-            "columnName": "scope",
-            "affinity": "TEXT",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "deviceId",
-            "day",
-            "key"
-          ]
-        },
-        "indices": [
-          {
-            "name": "idx_scoreComputationProvenance_computedBy",
-            "unique": false,
-            "columnNames": [
-              "computedBy"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_scoreComputationProvenance_computedBy` ON `${TABLE_NAME}` (`computedBy`)"
-          }
-        ],
-        "foreignKeys": []
-      },
-      {
         "tableName": "journal",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `day` TEXT NOT NULL, `question` TEXT NOT NULL, `answeredYes` INTEGER NOT NULL, `notes` TEXT, `numericValue` REAL, PRIMARY KEY(`deviceId`, `day`, `question`))",
         "fields": [
@@ -1649,6 +1587,46 @@
         "foreignKeys": []
       },
       {
+        "tableName": "ecgWaveformSample",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `ts` INTEGER NOT NULL, `sequence` INTEGER NOT NULL, `record` BLOB NOT NULL, PRIMARY KEY(`deviceId`, `ts`, `sequence`))",
+        "fields": [
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ts",
+            "columnName": "ts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "record",
+            "columnName": "record",
+            "affinity": "BLOB",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "deviceId",
+            "ts",
+            "sequence"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
         "tableName": "v18AuxSample",
         "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `ts` INTEGER NOT NULL, `fields` BLOB NOT NULL, PRIMARY KEY(`deviceId`, `ts`))",
         "fields": [
@@ -2221,7 +2199,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd723105c8d05d8fb1c667d1f33072c81')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a641357e666748e0d6ddda67b69b9325')"
     ]
   }
 }
