@@ -19,16 +19,16 @@
   },
   "authority": {
     "files": {"count": 509, "sha256": "0a0b02d39eb26ad0635933ad6fca51fb4c33db98178410bfe6676ab9d0fdcaee"},
-    "functions": {"count": 4543, "sha256": "64fda3cbaa490dc8d1714034053f86c55bb967a094ad912e81d2e0febde71e85"},
-    "properties": {"count": 490, "sha256": "d818268bd2c214d3e496d0ec0651ed1d7011a4a8c4fe8cc3692726e93f3f11bd"},
-    "constants": {"count": 2001, "sha256": "a9c1f36d2acc614dd747fd6cc0b3ea48079b81517afda5591d219f9591e353c3"},
+    "functions": {"count": 4577, "sha256": "09259f5ede64de80cc1e197806a9625e48bb19faaffb034a1bd82735c0427e2d"},
+    "properties": {"count": 498, "sha256": "39618728b66a07ba2816585ad36af55fe8adc21eec91c407bd6cea19244f6363"},
+    "constants": {"count": 2041, "sha256": "cd3d7c81c676d21d9bcc515f900ed585d68b8ba7e2440840b3fe52a702d4b8ef"},
     "file_pairs": {"count": 82, "sha256": "5e03b57496fc4c854b56b86ab00bb24163b5c16d25ad8e52786d6731563648e0"},
-    "function_pairs": {"count": 230, "sha256": "3f629f043bcf9093b5218c377bd7e42bd227ec197cdb98957bad2b8998d5aa56"},
-    "property_pairs": {"count": 164, "sha256": "1f824140b1e0d93516606f6703f6b5d4053b14c1ef27305cfc753e45a0760d04"},
-    "constant_pairs": {"count": 702, "sha256": "e3de4c1b84b8500c5700292648bf23dc680e5e14cde055c36c5d1ef4ecc39dc2"},
+    "function_pairs": {"count": 242, "sha256": "3716ce7cf8b2bb532ce2213213ba7fd7a3b7c036999e540a9953df5ca6bb83e4"},
+    "property_pairs": {"count": 168, "sha256": "911b6b88dc3279c807d34f1cac944c6bf28e64668e159274cdfa99ad9ad7d8d3"},
+    "constant_pairs": {"count": 720, "sha256": "ac70a1ecc9b69f9d3b9a6f98ebbdf7ea3ab6a61c7ee03ba52b5d89f2ac3e6332"},
     "unpaired_files": {"count": 368, "sha256": "906039f0562d34aacaa1d5f7bf3d6b82ead5c39fa56d2a1ff3cd563bbcf3f2d7"},
-    "unpaired_functions": {"count": 4096, "sha256": "af96c10bf1e31b75cc4573a44ebe3ffe45ac2c278ff7988ce40511ff5b6932d1"},
+    "unpaired_functions": {"count": 4106, "sha256": "0b41754b21d2985ab3ebc931dd7480a36a3c0834019dbf956f2953f367d588fa"},
     "unpaired_properties": {"count": 162, "sha256": "dabff97ba9bce0aebdc8ef84b9c4f107ce574020e8b0455d8f9214082948246b"},
-    "unpaired_constants": {"count": 597, "sha256": "578c607cc05b1cd1f867c206c9fab70237ac40707cd49d4e0c5cc66b400184c7"}
+    "unpaired_constants": {"count": 601, "sha256": "13693d0d240b34610a5ab2c6b1dcea1d9702b9da5e9e3714b631ef3795e71a38"}
   }
 }
